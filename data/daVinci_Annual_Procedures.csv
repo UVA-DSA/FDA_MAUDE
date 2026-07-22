@@ -1,0 +1,23 @@
+year,worldwide_davinci_procedures,yoy_growth_pct,source,note
+2004,15625,,"H. Alemzadeh et al., ""Adverse Events in Robotic Surgery,"" PLOS ONE, 2016 (study estimate; annual total not disclosed in Intuitive SEC filings)",study estimate (not in Intuitive filings)
+2005,21052,35,"H. Alemzadeh et al., ""Adverse Events in Robotic Surgery,"" PLOS ONE, 2016 (study estimate; annual total not disclosed in Intuitive SEC filings)",study estimate (not in Intuitive filings)
+2006,42105,100,"H. Alemzadeh et al., ""Adverse Events in Robotic Surgery,"" PLOS ONE, 2016 (study estimate; annual total not disclosed in Intuitive SEC filings)",study estimate (not in Intuitive filings)
+2007,71052,69,"H. Alemzadeh et al., ""Adverse Events in Robotic Surgery,"" PLOS ONE, 2016 (study estimate; annual total not disclosed in Intuitive SEC filings)",study estimate (not in Intuitive filings)
+2008,136000,91,https://www.sec.gov/Archives/edgar/data/1035267/000119312509021360/d10k.htm,"SEC 10-K (FY2008), filed 2009-02-06"
+2009,205000,51,https://www.sec.gov/Archives/edgar/data/1035267/000119312510016932/d10k.htm,"SEC 10-K (FY2009), filed 2010-01-29"
+2010,278000,36,https://www.sec.gov/Archives/edgar/data/1035267/000119312511020229/d10k.htm,"SEC 10-K (FY2010), filed 2011-02-01"
+2011,360000,29,https://www.sec.gov/Archives/edgar/data/1035267/000119312512039226/d263902d10k.htm,"SEC 10-K (FY2011), filed 2012-02-06"
+2012,450000,25,https://www.sec.gov/Archives/edgar/data/1035267/000119312513036675/d445195d10k.htm,"SEC 10-K (FY2012), filed 2013-02-04"
+2013,523000,16,https://www.sec.gov/Archives/edgar/data/1035267/000103526714000009/isrg-20131231x10k.htm,"SEC 10-K (FY2013), filed 2014-02-03"
+2014,570000,9,https://www.sec.gov/Archives/edgar/data/1035267/000103526715000014/isrg-20141231x10k.htm,"SEC 10-K (FY2014), filed 2015-02-06"
+2015,652000,14,https://www.sec.gov/Archives/edgar/data/1035267/000103526716000130/isrg-20151231x10k.htm,"SEC 10-K (FY2015), filed 2016-02-02"
+2016,753000,15,https://www.sec.gov/Archives/edgar/data/1035267/000103526717000021/isrg-20161231x10k.htm,"SEC 10-K (FY2016), filed 2017-02-06"
+2017,877000,16,https://www.sec.gov/Archives/edgar/data/1035267/000103526718000013/isrg-20171231x10k.htm,"SEC 10-K (FY2017), filed 2018-02-02"
+2018,1037000,18,https://www.sec.gov/Archives/edgar/data/1035267/000103526719000012/isrg-20181231x10k.htm,"SEC 10-K (FY2018), filed 2019-02-04"
+2019,1229000,19,https://www.sec.gov/Archives/edgar/data/1035267/000103526720000032/isrg-20191231.htm,"SEC 10-K (FY2019), filed 2020-02-07"
+2020,1243000,1,https://www.sec.gov/Archives/edgar/data/1035267/000103526721000028/isrg-20201231.htm,"SEC 10-K (FY2020), filed 2021-02-10"
+2021,1594000,28,https://www.sec.gov/Archives/edgar/data/1035267/000103526722000014/isrg-20211231.htm,"SEC 10-K (FY2021), filed 2022-02-03"
+2022,1875000,18,https://www.sec.gov/Archives/edgar/data/1035267/000103526723000019/isrg-20221231.htm,"SEC 10-K (FY2022), filed 2023-02-10"
+2023,2286000,22,https://www.sec.gov/Archives/edgar/data/1035267/000103526724000021/isrg-20231231.htm,"SEC 10-K (FY2023), filed 2024-01-31"
+2024,2683000,17,https://www.sec.gov/Archives/edgar/data/1035267/000103526725000017/isrg-20241231.htm,"SEC 10-K (FY2024), filed 2025-01-31"
+2025,3153000,18,https://www.sec.gov/Archives/edgar/data/1035267/000103526726000010/isrg-20251231.htm,"SEC 10-K (FY2025), filed 2026-02-03"

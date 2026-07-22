@@ -44,6 +44,38 @@ Excel_In2 = os.path.join(DATA_DIR, 'daVinci_MAUDE_Classified_' + str(END_YEAR) +
 CSV_TTE = os.path.join(OUTPUT_DIR, 'All_Failure_Times_Classes.csv')
 CSV_Out = 'Results.csv'
 
+# Annual da Vinci procedure volumes used to normalize malfunctions per procedure.
+PROC_CSV = os.path.join(DATA_DIR, 'daVinci_Annual_Procedures.csv')
+# Built-in counts for the original 2004-2013 study (fallback when the analysis
+# window is not covered by PROC_CSV).
+_PROC_2004_2013 = [15625, 21052, 42105, 71052, 114814, 170370, 229629, 292000, 367000, 422000]
+
+
+def load_procedure_window(start_year, end_year):
+    """Return (proc_start, proc_end, [procedures per year]) for the figures.
+
+    Prefers the real annual counts in PROC_CSV when they cover [start_year,
+    end_year]; otherwise falls back to the built-in 2004-2013 table so the
+    original study still reproduces.
+    """
+    counts = {}
+    if os.path.exists(PROC_CSV):
+        with open(PROC_CSV, newline='') as f:
+            for row in csv.DictReader(f):
+                try:
+                    counts[int(row['year'])] = int(row['worldwide_davinci_procedures'])
+                except (KeyError, ValueError):
+                    continue
+    years = list(range(start_year, end_year + 1))
+    # NB: use set-subset, not all(<generator>): `from pylab import *` shadows the
+    # builtin all() with numpy.all(), which does not iterate a generator.
+    if counts and set(years).issubset(counts):
+        return start_year, end_year, [counts[y] for y in years]
+    # Fallback to the original 2004-2013 window.
+    print('Note: %s does not cover %d-%d; using built-in 2004-2013 procedure counts '
+          'for the figures.' % (os.path.basename(PROC_CSV), start_year, end_year))
+    return 2004, 2013, list(_PROC_2004_2013)
+
 
 def get_ttf(time_filename, class_filename, out_filename):
     # Prepare the output file
@@ -111,6 +143,7 @@ def get_ttf(time_filename, class_filename, out_filename):
     End_Date = parser.parse(End_DateStr)
 
     All_TTES = []
+    not_found = 0
     for i in range(1, data_rows):
         Time_to_Event = -1
         TTES = []
@@ -152,8 +185,14 @@ def get_ttf(time_filename, class_filename, out_filename):
                 csv_wr.writerow(TTES + classHash[MDR_Key])
                 All_TTES.append(TTES + classHash[MDR_Key])
             else:
-                print('Errr: MDR Key not found!')
+                # Record present in the time file but not in the classified file.
+                # Expected when the time file is a superset (e.g. the full MAUDE
+                # extract vs. the curated/classified subset); count instead of
+                # printing one line per record.
+                not_found += 1
     f1.close()
+    if not_found:
+        print('Note: %d time-file records had no classified match (skipped).' % not_found)
     print('Got the failure times..')
     return All_TTES
 
@@ -213,30 +252,29 @@ def date_plot(t, y, x_label, y_label, filename):
 TTES = get_ttf(Excel_In, Excel_In2, CSV_TTE)
 
 # Read Event Data
-df = pd.read_csv(CSV_TTE)
+# keep_default_na=False keeps the literal "N/A" markers in the malfunction-class
+# columns intact (otherwise pandas reads them as NaN), so the "!= 'N/A'" presence
+# tests below select the right rows.
+df = pd.read_csv(CSV_TTE, keep_default_na=False)
 print(df.head())
 
 # =====================================================================
-# WARNING: the procedure-normalization and figures below are HARD-CODED to the
-# 2004-2013 study period. `Num_Proc` is the number of da Vinci procedures per
-# year for 2004..2013, the observation window is fixed to 01/01/2004-12/31/2013,
-# and the plot annotations are hand-placed for that data. To produce valid
-# per-procedure malfunction rates for 2014-2025 you MUST replace `Num_Proc`
-# (and Start_Date/End_Date/Years/annotation positions) with the real annual
-# procedure counts for the new window. Until then, only the failure-time table
-# written by get_ttf() above (CSV_TTE) is valid for the new dataset; the figures
-# are not.
+# Procedure-normalization window. `Num_Proc` (annual da Vinci procedure counts)
+# and the observation window are driven by load_procedure_window() from the
+# analysis years, using the real counts in PROC_CSV when available and the
+# built-in 2004-2013 table otherwise. NOTE: the text-annotation positions on the
+# two figures were hand-placed for the 2004-2013 data and may need nudging for a
+# different window; they are index-clamped so they never crash.
 # =====================================================================
+PROC_START_YEAR, PROC_END_YEAR, Num_Proc = load_procedure_window(START_YEAR, END_YEAR)
 
 # Start point
-Start_DateStr = "01/01/2004"
+Start_DateStr = "01/01/%d" % PROC_START_YEAR
 Start_Date = parser.parse(Start_DateStr)
-# End of observation period: 31 December, 2013
-End_DateStr = "12/31/2013"
+# End of observation period
+End_DateStr = "12/31/%d" % PROC_END_YEAR
 End_Date = parser.parse(End_DateStr)
 Num_Days = (End_Date - Start_Date).days + 1
-# Number of procedures per year (2004..2013) -- REPLACE for other windows.
-Num_Proc = [15625, 21052, 42105, 71052, 114814, 170370, 229629, 292000, 367000, 422000]
 yy = np.linspace(1, len(Num_Proc), len(Num_Proc))
 dd = np.linspace(0.5, len(Num_Proc) + 0.5, Num_Days)
 # Fit a 4th degree polynomial
@@ -244,11 +282,11 @@ params = np.polyfit(yy, Num_Proc, 4)
 # Predict the number of procedures per day over the whole period
 pred_yy = np.polyval(params, dd)
 
-# Show the estimated number of procedures, don't show for before 2004
-min_xlim = dt.datetime.strptime('01/01/2004', '%m/%d/%Y').date()
+# Show the estimated number of procedures over the procedure window
+min_xlim = dt.datetime.strptime('01/01/%d' % PROC_START_YEAR, '%m/%d/%Y').date()
 figure()
 # Mid-year points
-Years = ['2004', '2005', '2006', '2007', '2008', '2009', '2010', '2011', '2012', '2013']
+Years = [str(y) for y in range(PROC_START_YEAR, PROC_END_YEAR + 1)]
 t1 = []
 t0 = []
 Year_Dates = []
@@ -257,13 +295,15 @@ for y in Years:
     t1.append(dt.datetime.strptime('07/02/' + y, '%m/%d/%Y').date())
     t0.append(dt.datetime.strptime('01/01/' + y, '%m/%d/%Y').date())
 
-ti = dt.datetime.strptime('01/01/2009', '%m/%d/%Y')
+# Illustrative monthly breakdown for a mid-window year
+example_year = PROC_START_YEAR + len(Num_Proc) // 2
+ti = dt.datetime.strptime('01/01/%d' % example_year, '%m/%d/%Y')
 example_t0 = []
 example_h = []
 for i in range(1, 13):
     example_t0.append(ti.date())
     ti = ti + datetime.timedelta(31)
-    example_h.append(pred_yy[(ti - Start_Date).days])
+    example_h.append(pred_yy[min((ti - Start_Date).days, Num_Days - 1)])
 
 t2 = []
 ti = Start_Date.date()
@@ -275,7 +315,8 @@ scatter(t1, Num_Proc, facecolors='none')
 bar(t0, Num_Proc, 365, alpha=0.5, color='b')
 bar(example_t0, example_h, float(365) / float(12), color='b')
 annotate('Area under fitted curve = \n Total number of procedures',
-         xy=(mdates.date2num(t2[1930]), 150020), xytext=(mdates.date2num(t2[480]), 239950),
+         xy=(mdates.date2num(t2[min(1930, len(t2) - 1)]), 150020),
+         xytext=(mdates.date2num(t2[min(480, len(t2) - 1)]), 239950),
          bbox=dict(boxstyle="round", fc="w"),
          arrowprops=dict(arrowstyle="->", connectionstyle="arc3"),
          color='black', fontsize=13)
@@ -346,9 +387,9 @@ markers = ['^', '+', '*', 'x', 'o']
 plot_ix = 0
 for malfunc1, malfunc2 in [('System Error', 'System Error'), ('Vision', 'Vision'),
                            ('Arced', 'Tip Cover'), ('Fallen', 'Fallen'), ('Broken', 'Broken')]:
-    Failed = df.loc[df[malfunc1] > 0, ['Event_Date', 'TTE']]
+    Failed = df.loc[df[malfunc1] != 'N/A', ['Event_Date', 'TTE']]
     if not (malfunc2 == malfunc1):
-        Failed = pd.concat([Failed, df.loc[df[malfunc2] > 0, ['Event_Date', 'TTE']]])
+        Failed = pd.concat([Failed, df.loc[df[malfunc2] != 'N/A', ['Event_Date', 'TTE']]])
     Failed[['TTE']] = Failed[['TTE']].astype(int)
     print('Got ' + str(len(Failed)) + ' failure times..')
     Sorted_Failed = Failed.sort_values(by='TTE', ascending=True)
@@ -356,12 +397,12 @@ for malfunc1, malfunc2 in [('System Error', 'System Error'), ('Vision', 'Vision'
     Dates = (list(Sorted_Failed['Event_Date']))
 
     # Get failure counts per day
-    Failures_Years = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    Failures_Years = [0] * len(Num_Proc)
     Failure_dict = {'Date': [-1, -1]}
     for d in Dates:
         y = parser.parse(d).year
-        if y >= Start_Date.year:
-            Failures_Years[y - 2004] = Failures_Years[y - 2004] + 1
+        if PROC_START_YEAR <= y <= PROC_END_YEAR:
+            Failures_Years[y - PROC_START_YEAR] = Failures_Years[y - PROC_START_YEAR] + 1
             if d in Failure_dict:
                 Failure_dict[d][0] = Failure_dict[d][0] + 1
             else:
@@ -369,9 +410,8 @@ for malfunc1, malfunc2 in [('System Error', 'System Error'), ('Vision', 'Vision'
     Failure_dict.pop('Date')
 
     Cum_Failures_Years = [0]
-    for y in Failures_Years:
-        Cum_Failures_Years.append(
-            Cum_Failures_Years[-1] + (float(y) / float(Num_Proc[Failures_Years.index(y)])))
+    for yi, y in enumerate(Failures_Years):
+        Cum_Failures_Years.append(Cum_Failures_Years[-1] + (float(y) / float(Num_Proc[yi])))
     Cum_Failures_Years = Cum_Failures_Years[1:]
 
     # Get the number of failure per procedure for each week
@@ -387,7 +427,7 @@ for malfunc1, malfunc2 in [('System Error', 'System Error'), ('Vision', 'Vision'
     Cum_Failures_Weeks = [0]
     ti = Start_Date
     dateIndex = 0
-    Month_Start = ("01/01/2004")
+    Month_Start = ("01/01/%d" % PROC_START_YEAR)
     while ti <= End_Date:
         # Every first of month, calculate the failures for the previous month, save and reset
         if (ti > Start_Date) and (ti.day == 1):
@@ -513,26 +553,32 @@ xlocs[3] = 320
 ylocs[3] = 0.56
 xlocs[4] = 340
 ylocs[4] = 1.1
+# Hand-tuned week indices for the label positions; clamp so a window with fewer
+# weeks than the original 2004-2013 one cannot index out of range.
+def wk(i):
+    return Week_Dates[min(i, len(Week_Dates) - 1)]
+
+
 for plot_ix in range(0, len(labels)):
-    a = annotate(labels[plot_ix], (mdates.date2num(Week_Dates[xlocs[plot_ix]]), ylocs[plot_ix]),
+    a = annotate(labels[plot_ix], (mdates.date2num(wk(xlocs[plot_ix])), ylocs[plot_ix]),
                  bbox=dict(boxstyle="round", ec=colors[plot_ix], fc="w"), xycoords='data',
                  color=colors[plot_ix], rotation=rots[plot_ix], fontsize=13)
     a.get_bbox_patch().set_boxstyle("round,pad=0.15")
 
-a = annotate('Constant Rate', xy=(mdates.date2num(Week_Dates[420]), 0.8),
-             xytext=(mdates.date2num(Week_Dates[310]), 0.88),
+a = annotate('Constant Rate', xy=(mdates.date2num(wk(420)), 0.8),
+             xytext=(mdates.date2num(wk(310)), 0.88),
              bbox=dict(boxstyle="round", ec="w", fc="w"),
              arrowprops=dict(arrowstyle="->", connectionstyle="arc3"), color='black', fontsize=12)
 a.get_bbox_patch().set_boxstyle("round,pad=0.15")
 
-a = annotate('Increasing Rate', xy=(mdates.date2num(Week_Dates[170]), 0.82),
-             xytext=(mdates.date2num(Week_Dates[60]), 0.9),
+a = annotate('Increasing Rate', xy=(mdates.date2num(wk(170)), 0.82),
+             xytext=(mdates.date2num(wk(60)), 0.9),
              bbox=dict(boxstyle="round", ec="w", fc="w"),
              arrowprops=dict(arrowstyle="->", connectionstyle="arc"), color='black', fontsize=12)
 a.get_bbox_patch().set_boxstyle("round,pad=0.15")
 
-a = annotate('Decreasing Rate', xy=(mdates.date2num(Week_Dates[270]), 0.2),
-             xytext=(mdates.date2num(Week_Dates[270]), 0.26),
+a = annotate('Decreasing Rate', xy=(mdates.date2num(wk(270)), 0.2),
+             xytext=(mdates.date2num(wk(270)), 0.26),
              bbox=dict(boxstyle="round", ec="w", fc="w"),
              arrowprops=dict(arrowstyle="->", connectionstyle="arc3"), color='black', fontsize=12)
 a.get_bbox_patch().set_boxstyle("round,pad=0.15")

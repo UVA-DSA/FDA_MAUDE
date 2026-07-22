@@ -36,6 +36,7 @@ FDA_MAUDE/
 │   ├── download_maude_data.py  #  1. scrape + merge FDA FOIDEV/MDRFOI records
 │   ├── classify_malfunctions.py#  2. classify malfunctions & impacts from text
 │   ├── event_arrival_times.py  #  3. reliability / time-between-failure analysis
+│   ├── fetch_procedure_data.py #     scrape annual da Vinci procedure counts (SEC EDGAR)
 │   └── negex.py                #     NegEx negation-detection helper
 ├── analysis/
 │   ├── malfunctions.py         #  4. statistics, paper tables, Venn counts (pandas)
@@ -102,17 +103,24 @@ years match:
 To reproduce the original study on the committed dataset instead, set these back
 to `START_YEAR = 2000` / `END_YEAR = 2013`.
 
-> ⚠️ **Two things to verify before a 2014–2025 run:**
-> 1. **FDA field numbers.** The FDA changed the DEVICE/MDRFOI column order around
->    2009. `download_maude_data.py` ships both the pre-2009 and the current
->    layouts (`*_PRE2009` vs `*_CURRENT`) and uses the current one; confirm the
->    field numbers still match the files you download (the FDA MAUDE download
->    page documents the current layout).
-> 2. **Procedure counts in `event_arrival_times.py`.** Its per-procedure
->    normalization and figures are hard-coded to the 2004–2013 annual da Vinci
->    procedure counts. The failure-time table it writes is valid for any window,
->    but the *figures* require replacing `Num_Proc` (and the fixed
->    2004–2013 dates/annotations) with real 2014–2025 procedure numbers.
+> ⚠️ **Verify before a 2014–2025 run — FDA field numbers.** The FDA changed the
+> DEVICE/MDRFOI column order around 2009. `download_maude_data.py` ships both the
+> pre-2009 and the current layouts (`*_PRE2009` vs `*_CURRENT`) and uses the
+> current one; confirm the field numbers still match the files you download (the
+> FDA MAUDE download page documents the current layout).
+>
+> **Procedure counts (`event_arrival_times.py`).** Per-procedure normalization
+> loads the real annual da Vinci volumes from
+> `data/daVinci_Annual_Procedures.csv` whenever they cover the analysis window,
+> falling back to the built-in 2004–2013 table otherwise. That CSV and its
+> `docs/daVinci_Annual_Procedures_Sources.md` are **generated** by
+> `python src/fetch_procedure_data.py`, which scrapes each fiscal year's total
+> straight from Intuitive Surgical's SEC 10-K filings (EDGAR). Re-run it to
+> refresh the data (2008–present come from the filings; 2004–2007 fall back to
+> the original study's estimates, which Intuitive never disclosed). The
+> hand-placed figure annotations were positioned for the 2004–2013 data and may
+> need nudging for a different window (they are index-clamped so they never
+> crash).
 
 > The Python analysis (`malfunctions.py`) can optionally draw the 3-set Venn
 > diagram if `matplotlib-venn` is installed (`pip install matplotlib-venn`);
