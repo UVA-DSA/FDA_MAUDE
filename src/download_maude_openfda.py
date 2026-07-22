@@ -44,7 +44,17 @@ manufacturer name, and OEM-made da Vinci accessories (e.g. Teleflex-built
 obturators). They are kept by default and itemized in the run summary;
 pass --require-intuitive (or set REQUIRE_INTUITIVE) to drop them.
 
-    python src/download_maude_openfda.py [--scope=all|davinci] [--require-intuitive]
+Local enrichment + verification. The API does not expose
+DEVICE_DATE_OF_MANUFACTURE or DATE_REPORT_TO_MANUFACTURER. By default the
+script therefore also downloads the DEVICE/MDRFOI bulk dumps (reusing
+download_maude_data.py's downloader and filenames; several GB on first run),
+fills Manufacture Year / Time_to_Event / Report_to_Manufacture_Year and the
+times-CSV date columns from them, and cross-verifies every other date and
+name field against the local files, printing an agreement summary. Pass
+--skip-local for the previous API-only behavior (those fields stay N/A and
+no bulk files are downloaded).
+
+    python src/download_maude_openfda.py [--scope=all|davinci] [--require-intuitive] [--skip-local]
 """
 
 import calendar
@@ -232,6 +242,153 @@ def extract_row(event):
     ]
 
 
+# =====================================================================
+# Local bulk-file enrichment + verification
+# =====================================================================
+# The API does not expose DEVICE_DATE_OF_MANUFACTURE or
+# DATE_REPORT_TO_MANUFACTURER. When local enrichment is enabled (default),
+# the DEVICE/MDRFOI bulk files are downloaded (reusing the legacy script's
+# machinery and filenames) and those dates are read from them; all other
+# dates and names are cross-verified against the local files.
+
+def ensure_local_files():
+    """Download any missing DEVICE/MDRFOI bulk files into data/.
+
+    Reuses download_maude_data's file lists and downloader so both scripts
+    always agree on filenames. Returns (FOIDEV_files, MDRFOI_files).
+    """
+    import download_maude_data as legacy
+    missing_dev = [n for n in legacy.FOIDEV_files
+                   if not os.path.exists(os.path.join(DATA_DIR, n + '.txt'))]
+    missing_mdr = [n for n in legacy.MDRFOI_files
+                   if not os.path.exists(os.path.join(DATA_DIR, n + '.txt'))]
+    if missing_dev or missing_mdr:
+        print('Downloading %d missing bulk files (this can take a few minutes '
+              'and several GB of disk): %s'
+              % (len(missing_dev) + len(missing_mdr), missing_dev + missing_mdr))
+        legacy.MAUDE_Download(missing_dev, missing_mdr, DATA_DIR)
+    return legacy.FOIDEV_files, legacy.MDRFOI_files
+
+
+def _scan_files(filenames, keys, wanted_cols):
+    """First-hit-per-key scan of pipe-delimited bulk files by header name.
+
+    Returns {mdr_key: {col: value}} for keys found; files are scanned in the
+    given order and the first record per key wins (same convention as the
+    legacy merge).
+    """
+    found = {}
+    for name in filenames:
+        path = os.path.join(DATA_DIR, name + '.txt')
+        if not os.path.exists(path):
+            continue
+        with open(path, 'r', encoding='latin-1') as f:
+            header = next(f).rstrip('\n').split('|')
+            try:
+                idx = {c: header.index(c) for c in wanted_cols}
+            except ValueError:
+                continue  # file lacks the wanted columns (old layout)
+            for line in f:
+                k = line.split('|', 1)[0]
+                if k in keys and k not in found:
+                    fields = line.rstrip('\n').split('|')
+                    if len(fields) > max(idx.values()):
+                        found[k] = {c: fields[i].strip() for c, i in idx.items()}
+        if len(found) == len(keys):
+            break
+    return found
+
+
+MDRFOI_COLS = ['DATE_RECEIVED', 'DATE_REPORT', 'DATE_OF_EVENT',
+               'DATE_REPORT_TO_MANUFACTURER', 'DEVICE_DATE_OF_MANUFACTURE', 'EVENT_TYPE']
+DEVICE_COLS = ['BRAND_NAME', 'GENERIC_NAME', 'MANUFACTURER_D_NAME',
+               'DEVICE_REPORT_PRODUCT_CODE']
+
+
+def _norm_date(s):
+    """Normalize MM/DD/YYYY or YYYYMMDD to YYYYMMDD ('' if unparseable/empty)."""
+    s = (s or '').strip()
+    if len(s) == 8 and s.isdigit():
+        return s
+    parts = s.split('/')
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        return '%04d%02d%02d' % (int(parts[2]), int(parts[0]), int(parts[1]))
+    return ''
+
+
+def _norm_name(s):
+    """Case/punctuation-insensitive name normalization for verification."""
+    out = []
+    for ch in (s or '').upper():
+        out.append(ch if (ch.isalnum() or ch == ' ') else ' ')
+    return ' '.join(''.join(out).split())
+
+
+def enrich_and_verify(rows, times_rows, mdr_local, dev_local):
+    """Fill the missing date fields from the local files and verify the rest.
+
+    rows/times_rows are {key: list} as produced by the fetch phase. Returns a
+    stats dict: per-field verification counts + local-coverage numbers.
+    """
+    stats = {f: {'agree': 0, 'differ': 0} for f in
+             ['date_received', 'date_report', 'date_of_event', 'event_type',
+              'brand', 'generic', 'manufacturer', 'product_code']}
+    examples = []
+    no_mdr = no_dev = 0
+
+    for key, row in rows.items():
+        trow = times_rows[key]
+        m = mdr_local.get(key)
+        d = dev_local.get(key)
+
+        # --- Enrichment: the two dates openFDA does not expose ---
+        if m:
+            mfg = _norm_date(m['DEVICE_DATE_OF_MANUFACTURE'])
+            to_mfr = _norm_date(m['DATE_REPORT_TO_MANUFACTURER'])
+            row[6] = mfg[:4] if mfg else 'N/A'                     # Manufacture Year
+            row[8] = to_mfr[:4] if to_mfr else 'N/A'               # Report_to_Manufacture_Year
+            row[11] = _days_between(_norm_date(m['DATE_OF_EVENT']), mfg)  # Time_to_Event
+            trow[3] = to_mfr                                       # DATE_REPORT_TO_MANUFACTURER
+            trow[5] = mfg                                          # DEVICE_DATE_OF_MANUFACTURE
+        else:
+            no_mdr += 1
+            row[8] = 'N/A'   # without local coverage there is no real value
+            trow[3] = ''
+
+        # --- Verification: API values vs local bulk values ---
+        if m:
+            # times row layout: [key, DATE_OF_EVENT, DATE_REPORT,
+            #                    DATE_REPORT_TO_MANUFACTURER, DATE_RECEIVED, MFG]
+            for field, api_val, loc_val in [
+                    ('date_received', trow[4], _norm_date(m['DATE_RECEIVED'])),
+                    ('date_report', trow[2], _norm_date(m['DATE_REPORT'])),
+                    ('date_of_event', trow[1], _norm_date(m['DATE_OF_EVENT'])),
+                    ('event_type', row[4],
+                     m['EVENT_TYPE'] if m['EVENT_TYPE'] not in ('', '*') else 'O')]:
+                ok = _norm_date(api_val) == loc_val if field.startswith('date') \
+                    else api_val == loc_val
+                stats[field]['agree' if ok else 'differ'] += 1
+                if not ok and len(examples) < 10:
+                    examples.append((key, field, api_val, loc_val))
+        if d:
+            for field, api_val, loc_val in [
+                    ('brand', row[14], d['BRAND_NAME']),
+                    ('generic', row[15], d['GENERIC_NAME']),
+                    ('manufacturer', row[13], d['MANUFACTURER_D_NAME']),
+                    ('product_code', row[16], d['DEVICE_REPORT_PRODUCT_CODE'])]:
+                ok = _norm_name(api_val) == _norm_name(loc_val)
+                stats[field]['agree' if ok else 'differ'] += 1
+                if not ok and len(examples) < 10:
+                    examples.append((key, field, api_val, loc_val))
+        else:
+            no_dev += 1
+
+    stats['_no_mdr'] = no_mdr
+    stats['_no_dev'] = no_dev
+    stats['_examples'] = examples
+    return stats
+
+
 def _get(url, max_retries=5):
     """GET with backoff on rate-limit / transient errors. None => zero results."""
     for attempt in range(max_retries):
@@ -277,60 +434,80 @@ def main():
     if scope not in ('all', 'davinci'):
         raise SystemExit("Unknown scope %r (use --scope=all or --scope=davinci)" % scope)
     require_intuitive = REQUIRE_INTUITIVE or '--require-intuitive' in sys.argv[1:]
+    skip_local = '--skip-local' in sys.argv[1:]
     csv_out, times_out = output_paths(scope)
-    print('Scope: %s%s' % (scope, ' (Intuitive manufacturer required)'
-                           if require_intuitive else ''))
+    print('Scope: %s%s%s' % (scope,
+                             ' (Intuitive manufacturer required)' if require_intuitive else '',
+                             ' (local enrichment skipped)' if skip_local else ''))
 
     os.makedirs(DATA_DIR, exist_ok=True)
+
+    # --- Phase 1: fetch everything from the API into memory ---
     seen = set()
-    written = 0
+    rows = {}         # key -> data-CSV row
+    times_rows = {}   # key -> times-CSV row
     skipped_scope = 0
     skipped_mfr = 0
     non_intuitive_kept = {}   # manufacturer name -> count, for the run summary
     counts = {'D': 0, 'IN': 0, 'M': 0, 'O': 0}
+    for year in range(START_YEAR, END_YEAR + 1):
+        year_n = 0
+        for month in range(1, 13):
+            last = calendar.monthrange(year, month)[1]
+            rng = '[%d-%02d-01+TO+%d-%02d-%02d]' % (year, month, year, month, last)
+            for ev in fetch_range(rng):
+                key = ev.get('mdr_report_key')
+                if key in seen:
+                    continue
+                seen.add(key)
+                if not in_scope(ev, scope):
+                    skipped_scope += 1
+                    continue
+                if not has_intuitive_mfr(ev):
+                    if require_intuitive:
+                        skipped_mfr += 1
+                        continue
+                    mfr = (_pick_device(ev).get('manufacturer_d_name')
+                           or '(blank)').strip() or '(blank)'
+                    non_intuitive_kept[mfr] = non_intuitive_kept.get(mfr, 0) + 1
+                row = extract_row(ev)
+                rows[key] = row
+                # DATE_REPORT_TO_MANUFACTURER + DEVICE_DATE_OF_MANUFACTURE come
+                # from the local bulk files in phase 2 (not exposed by the API).
+                times_rows[key] = [key, ev.get('date_of_event', ''),
+                                   ev.get('date_report', ''), '',
+                                   ev.get('date_received', ''), '']
+                counts[row[4]] = counts.get(row[4], 0) + 1
+                year_n += 1
+            time.sleep(REQUEST_PAUSE)
+        print('  %d: %d reports (running total %d)' % (year, year_n, len(rows)), flush=True)
+
+    # --- Phase 2: local bulk files -> missing dates + cross-verification ---
+    stats = None
+    if not skip_local:
+        foidev_files, mdrfoi_files = ensure_local_files()
+        keys = set(rows)
+        print('Scanning local MDRFOI files for %d keys...' % len(keys), flush=True)
+        mdr_local = _scan_files(mdrfoi_files, keys, MDRFOI_COLS)
+        print('  found %d/%d in MDRFOI files' % (len(mdr_local), len(keys)), flush=True)
+        print('Scanning local DEVICE files...', flush=True)
+        dev_local = _scan_files(foidev_files, keys, DEVICE_COLS)
+        print('  found %d/%d in DEVICE files' % (len(dev_local), len(keys)), flush=True)
+        stats = enrich_and_verify(rows, times_rows, mdr_local, dev_local)
+
+    # --- Phase 3: write the CSVs ---
     with open(csv_out, 'w', newline='') as f, open(times_out, 'w', newline='') as ft:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADER)
-        # Same column names get_ttf() looked up in the legacy .xls 'Maude_Data'
-        # sheet; DEVICE_DATE_OF_MANUFACTURE is not exposed by openFDA => blank.
         times_writer = csv.writer(ft)
         times_writer.writerow(['MDR_REPORT_KEY', 'DATE_OF_EVENT', 'DATE_REPORT',
                                'DATE_REPORT_TO_MANUFACTURER', 'DATE_RECEIVED',
                                'DEVICE_DATE_OF_MANUFACTURE'])
-        for year in range(START_YEAR, END_YEAR + 1):
-            year_written = 0
-            for month in range(1, 13):
-                last = calendar.monthrange(year, month)[1]
-                rng = '[%d-%02d-01+TO+%d-%02d-%02d]' % (year, month, year, month, last)
-                for ev in fetch_range(rng):
-                    key = ev.get('mdr_report_key')
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    if not in_scope(ev, scope):
-                        skipped_scope += 1
-                        continue
-                    if not has_intuitive_mfr(ev):
-                        if require_intuitive:
-                            skipped_mfr += 1
-                            continue
-                        mfr = (_pick_device(ev).get('manufacturer_d_name')
-                               or '(blank)').strip() or '(blank)'
-                        non_intuitive_kept[mfr] = non_intuitive_kept.get(mfr, 0) + 1
-                    row = extract_row(ev)
-                    writer.writerow(row)
-                    times_writer.writerow([key, ev.get('date_of_event', ''),
-                                           ev.get('date_report', ''),
-                                           ev.get('date_manufacturer_received', ''),
-                                           ev.get('date_received', ''), ''])
-                    counts[row[4]] = counts.get(row[4], 0) + 1
-                    written += 1
-                    year_written += 1
-                time.sleep(REQUEST_PAUSE)
-            f.flush()
-            ft.flush()
-            print('  %d: %d reports (running total %d)' % (year, year_written, written),
-                  flush=True)
+        for key in rows:
+            writer.writerow(rows[key])
+            times_writer.writerow(times_rows[key])
+
+    # --- Summary ---
     print('\nWrote %s' % csv_out)
     print('Wrote %s' % times_out)
     if skipped_scope:
@@ -345,8 +522,19 @@ def main():
               '--require-intuitive to drop them):' % total)
         for mfr, n in sorted(non_intuitive_kept.items(), key=lambda kv: -kv[1]):
             print('  %5d  %s' % (n, mfr))
+    if stats is not None:
+        print('\n--- Verification vs local bulk files ---')
+        print('No local MDRFOI record: %d, no local DEVICE record: %d '
+              '(recent reports may not be in the bulk dumps yet)'
+              % (stats['_no_mdr'], stats['_no_dev']))
+        for field in ['date_received', 'date_report', 'date_of_event', 'event_type',
+                      'brand', 'generic', 'manufacturer', 'product_code']:
+            s = stats[field]
+            print('  %-14s agree=%d differ=%d' % (field, s['agree'], s['differ']))
+        for key, field, api_val, loc_val in stats['_examples']:
+            print('  e.g. [%s] %s: api=%r local=%r' % (key, field, api_val, loc_val))
     print('Total reports: %d  (Malfunction=%d, Injury=%d, Death=%d, Other=%d)'
-          % (written, counts['M'], counts['IN'], counts['D'], counts['O']))
+          % (len(rows), counts['M'], counts['IN'], counts['D'], counts['O']))
 
 
 if __name__ == '__main__':

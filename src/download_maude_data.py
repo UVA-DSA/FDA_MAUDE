@@ -11,6 +11,17 @@ Ported from Python 2 to Python 3, and updated to process the 2014-2025 data
 brought over from the June-2019 MedSafe_MAUDE update). Requires: requests,
 beautifulsoup4, xlwt.
 
+Interface parity with download_maude_openfda.py: downloads ALL Intuitive
+reports including the EndoWrist instrument/accessory events (the DEVICE-line
+keyword match covers the manufacturer field), supports the same
+--scope=all|davinci and --require-intuitive flags, writes the same
+daVinci_MAUDE_Data_<END_YEAR><suffix>.csv + daVinci_MAUDE_Times_... outputs
+(plus the legacy .xls, capped at 65,536 rows), and prints the same run summary.
+Unlike the openFDA route, the times CSV here includes the real
+DEVICE_DATE_OF_MANUFACTURE.
+
+    python src/download_maude_data.py [--scope=all|davinci] [--require-intuitive]
+
 NOTE ON FDA FILE LAYOUTS: the FDA changed the column order of the DEVICE and
 MDRFOI files around 2009. The 1-based field numbers below must match the layout
 of the files you actually download; verify them against the current field
@@ -19,7 +30,6 @@ definitions published on the FDA MAUDE download page before a fresh run.
 
 import csv
 import os
-import re
 import time
 import zipfile
 from zipfile import ZipFile
@@ -83,8 +93,52 @@ device_keywords = [['da vinci', 'davinci', 'da-vinci', 'da vinchi', 'davinchi',
                     'da vinci xi', 'da vinci sp', 'de vinci', 'devinci',
                     'davency', 'davincy', 'da vinci si', 'da vinci s',
                     'intuitive surgical', 'intuitivesurgical',
-                    'intuitive surgical operations'], ['pacemaker']]
+                    'intuitive surgical operations', 'endowrist'], ['pacemaker']]
 data_dir = DATA_DIR
+
+# --- Scope / filtering, mirroring download_maude_openfda.py ---
+# The DEVICE-line keyword match above already captures ALL Intuitive reports,
+# including the EndoWrist instruments/accessories reported under their own
+# brand names ("intuitive surgical" matches the manufacturer field of every
+# instrument record). SCOPE controls which of those are kept at merge time:
+#   * 'all'     -- every Intuitive/da Vinci report (default).
+#   * 'davinci' -- only reports whose brand/generic/manufacturer mentions
+#                  da Vinci; output filenames get a _daVinci_brand suffix.
+# Overridable on the command line with --scope=all|davinci.
+SCOPE = 'all'
+
+# If True (or --require-intuitive), keep only records whose manufacturer name
+# mentions Intuitive. Off by default (same rationale as the openFDA script:
+# the strict rule drops genuine voluntary reports and OEM da Vinci accessories);
+# every run itemizes the kept non-Intuitive manufacturers.
+REQUIRE_INTUITIVE = False
+
+# Substrings identifying a da Vinci-brand record for scope='davinci' (same list
+# as download_maude_openfda.py). 'vinci' covers "da vinci"/"davinci"/
+# "da-vinci"/"de vinci"/"devinci".
+DAVINCI_KEYWORDS = ['vinci', 'vinchi', 'davency', 'davincy']
+
+
+def output_paths(scope, end_year, device):
+    """Return (data_csv, times_csv, xls) output paths for the given scope."""
+    suffix = '' if scope == 'all' else '_daVinci_brand'
+    base = os.path.join(DATA_DIR, '%s_MAUDE_Data_%d%s' % (device, end_year, suffix))
+    times = os.path.join(DATA_DIR, '%s_MAUDE_Times_%d%s.csv' % (device, end_year, suffix))
+    return base + '.csv', times, base + '.xls'
+
+
+def record_in_scope(foidev_fields, scope):
+    """True if a DEVICE record (brand idx2 / generic idx3 / manufacturer idx4)
+    belongs in the requested scope."""
+    if scope == 'all':
+        return True
+    text = ' '.join(foidev_fields[2:5]).lower()
+    return any(k in text for k in DAVINCI_KEYWORDS)
+
+
+def record_has_intuitive_mfr(foidev_fields):
+    """True if the DEVICE record names Intuitive as its manufacturer."""
+    return 'intuitive' in foidev_fields[4].lower()
 
 # FDA source filenames (downloaded/extracted into data/). The FDA renamed the
 # yearly DEVICE files from "foidev<YYYY>" to "device<YYYY>" (the old foidev<YYYY>
@@ -236,63 +290,72 @@ def Get_Other_Fields(MDR_Link, max_retries=3):
 
     soup = BeautifulSoup(result.text, 'html.parser')
 
-    ##### Patient Outcome, Event Description, and Manufacturer Narrative
-    regex = re.compile(r'\s*[\n\r\t]')
+    ##### Patient Outcome, Event Description, and Manufacturer Narrative.
+    # The MAUDE detail page was redesigned since the original 2013 study: the
+    # narrative labels are now "Event or Problem Description" and
+    # "(Additional) Manufacturer Narrative", and the text lives in the next
+    # <div> rather than a <p>. Take whichever block element follows the label
+    # first, which also handles the old layout.
     Patient_Outcome = 'N/A'
     Event = ''
     Narrative = ''
-    for st in soup.findAll('strong'):
-        if not st.string:
+
+    def _block_text(st):
+        block = st.find_next(['div', 'p'])
+        if block is None:
+            return ''
+        return _clean(' '.join(block.get_text().split()))
+
+    for st in soup.find_all('strong'):
+        label = ' '.join(st.get_text().split())
+        if not label:
             continue
-        # Patient Outcome
-        if st.string.count('Patient Outcome') > 0:
-            if st.next.next != '':
-                Raw_Outcome = str(st.next.next)
-                Patient_Outcome = _clean(regex.sub('', Raw_Outcome).strip()).replace("&nbsp;", "")
-
-        # Event Description
-        if st.string.find('Event Description') > 0:
-            if st.findNext('p').contents != []:
-                Raw_Event = str(st.findNext('p').contents[0])
-                Event = Event + _clean(regex.sub('', Raw_Event).strip()) + ' '
-
-        # Manufacturer Narrative
-        if st.string.find('Manufacturer Narrative') > 0:
-            if st.findNext('p').contents != []:
-                Raw_Narrative = str(st.findNext('p').contents[0])
-                Narrative = Narrative + _clean(regex.sub('', Raw_Narrative).strip()) + ' '
+        # Patient Outcome (old layout only; the current page no longer has it)
+        if 'Patient Outcome' in label:
+            raw = st.next.next if st.next is not None else ''
+            if raw:
+                Patient_Outcome = _clean(' '.join(str(raw).split())).replace('&nbsp;', '')
+        # Event Description (old) / Event or Problem Description (current)
+        elif ('Event Description' in label) or ('Event or Problem Description' in label):
+            text = _block_text(st)
+            if text and text not in Event:
+                Event = Event + text + ' '
+        # Manufacturer Narrative / Additional Manufacturer Narrative
+        elif 'Manufacturer Narrative' in label:
+            text = _block_text(st)
+            if text and text not in Narrative:
+                Narrative = Narrative + text + ' '
     # If not found any narrative or event description
-    if Event == '':
-        Event = 'N/A'
-    if Narrative == '':
-        Narrative = 'N/A'
-
-    ##### Number of Devices
-    for st in soup.findAll('th'):
-        if len(st.contents) > 1:
-            if st.contents[1].string is None:
-                continue
-            label = _clean(st.contents[1].string.strip())
-            if ((label.count('Device Was Involved in the Event') > 0) or
-                    (label.count('DeviceS WERE Involved in the Event') > 0)):
-                _ = _clean(st.contents[0].contents[0].string.strip())
-                break
+    Event = Event.strip() or 'N/A'
+    Narrative = Narrative.strip() or 'N/A'
     return [Patient_Outcome, Event, Narrative]
 
 
 def MAUDE_Merge_Tables(start_year, end_year, FOIDEV_files, MDRFOI_files, FOIDEV_Field_Numbers,
-                       MDRFOI_Field_Numbers, device_name, data_dir):
+                       MDRFOI_Field_Numbers, device_name, data_dir,
+                       scope='all', require_intuitive=False):
     MAUDE_Keys = []
     AllCounts = [0, 0, 0]
+    # Parity counters with download_maude_openfda.py
+    skipped_scope = 0
+    skipped_mfr = 0
+    non_intuitive_kept = {}
+    impact_counts = {'D': 0, 'IN': 0, 'M': 0, 'O': 0}
 
     # Optimized MAUDE Data Output
     newbook = xlwt.Workbook("iso-8859-2")
     newsheet = newbook.add_sheet('Maude_Data', cell_overwrite_ok=True)
 
-    Excel_file = os.path.join(data_dir, device_name + '_MAUDE_Data_' + str(end_year) + '.xls')
-    CSV_file = os.path.join(data_dir, device_name + '_MAUDE_Data_' + str(end_year) + '.csv')
+    CSV_file, Times_file, Excel_file = output_paths(scope, end_year, device_name)
     f1 = open(CSV_file, 'w', newline='')
     csv_wr = csv.writer(f1, dialect='excel', delimiter=',')
+    # Full dates for the reliability analysis (event_arrival_times.py); same
+    # format as the openFDA route, but here DEVICE_DATE_OF_MANUFACTURE is real.
+    ft = open(Times_file, 'w', newline='')
+    times_wr = csv.writer(ft)
+    times_wr.writerow(['MDR_REPORT_KEY', 'DATE_OF_EVENT', 'DATE_REPORT',
+                       'DATE_REPORT_TO_MANUFACTURER', 'DATE_RECEIVED',
+                       'DEVICE_DATE_OF_MANUFACTURE'])
 
     # Extract the Titles of Fields of Interest
     # FOIDEV_Titles
@@ -389,6 +452,18 @@ def MAUDE_Merge_Tables(start_year, end_year, FOIDEV_files, MDRFOI_files, FOIDEV_
 
                 # Relevant record we have not already processed in a prior run
                 if (MDR_Key in device_MDR_Hash) and (MDR_Key not in prevMDR_Hash):
+                    dev_fields = device_MDR_Hash[MDR_Key]
+                    # Scope / manufacturer filters (before the expensive per-report
+                    # scraping) -- parity with download_maude_openfda.py
+                    if not record_in_scope(dev_fields, scope):
+                        skipped_scope += 1
+                        continue
+                    if not record_has_intuitive_mfr(dev_fields):
+                        if require_intuitive:
+                            skipped_mfr += 1
+                            continue
+                        mfr = dev_fields[4].strip() or '(blank)'
+                        non_intuitive_kept[mfr] = non_intuitive_kept.get(mfr, 0) + 1
                     # Get the report year
                     if MDRFOI_fields[MDRFOI_titles.index('DATE_RECEIVED')] != '':
                         Report_DateStr = MDRFOI_fields[MDRFOI_titles.index('DATE_RECEIVED')]
@@ -458,28 +533,33 @@ def MAUDE_Merge_Tables(start_year, end_year, FOIDEV_files, MDRFOI_files, FOIDEV_
                         else:
                             Time_to_Report = 'N/A'
 
-                        # Write the extracted MDRFOI Columns from online records
-                        newsheet.write(curr_row, 0, xlwt.Formula(MDR_HLink))
-                        newsheet.write(curr_row, 1, Patient_Outcome)
-                        newsheet.write(curr_row, 2, Event)
-                        newsheet.write(curr_row, 3, Narrative)
-                        newsheet.write(curr_row, 4, Manufacture_Year)
-                        newsheet.write(curr_row, 5, Event_Year)
-                        newsheet.write(curr_row, 6, Report_Year)
-                        newsheet.write(curr_row, 7, Time_to_Event)
-                        newsheet.write(curr_row, 8, Time_to_Report)
-                        curr_col = 9
+                        # Write the extracted MDRFOI Columns from online records.
+                        # (.xls caps at 65,536 rows; the CSVs always have all rows.)
+                        if curr_row <= 65535:
+                            newsheet.write(curr_row, 0, xlwt.Formula(MDR_HLink))
+                            newsheet.write(curr_row, 1, Patient_Outcome)
+                            newsheet.write(curr_row, 2, Event)
+                            newsheet.write(curr_row, 3, Narrative)
+                            newsheet.write(curr_row, 4, Manufacture_Year)
+                            newsheet.write(curr_row, 5, Event_Year)
+                            newsheet.write(curr_row, 6, Report_Year)
+                            newsheet.write(curr_row, 7, Time_to_Event)
+                            newsheet.write(curr_row, 8, Time_to_Report)
+                            curr_col = 9
 
-                        # Write the rest of MDRFOI Columns
-                        for i in range(0, len(MDRFOI_titles)):
-                            if MDRFOI_titles[i].find('EVENT_TYPE') > -1:
-                                newsheet.write(curr_row, curr_col + i, Event_Type)
-                            else:
-                                newsheet.write(curr_row, curr_col + i, MDRFOI_fields[i])
-                        # Write FOIDEV Columns
-                        for i in range(0, len(FOIDEV_titles)):
-                            newsheet.write(curr_row, curr_col + len(MDRFOI_titles) + i,
-                                           device_MDR_Hash[MDR_Key][i])
+                            # Write the rest of MDRFOI Columns
+                            for i in range(0, len(MDRFOI_titles)):
+                                if MDRFOI_titles[i].find('EVENT_TYPE') > -1:
+                                    newsheet.write(curr_row, curr_col + i, Event_Type)
+                                else:
+                                    newsheet.write(curr_row, curr_col + i, MDRFOI_fields[i])
+                            # Write FOIDEV Columns
+                            for i in range(0, len(FOIDEV_titles)):
+                                newsheet.write(curr_row, curr_col + len(MDRFOI_titles) + i,
+                                               device_MDR_Hash[MDR_Key][i])
+                        elif curr_row == 65536:
+                            print('Warning: .xls row limit reached; remaining rows are in '
+                                  'the CSVs only.')
 
                         # Write selected columns to CSV file
                         Manufacturer = device_MDR_Hash[MDR_Key][4]
@@ -491,6 +571,18 @@ def MAUDE_Merge_Tables(start_year, end_year, FOIDEV_files, MDRFOI_files, FOIDEV_
                                          ReportMan_Year, ReportMade_Year, Report_Year,
                                          Time_to_Event, Time_to_Report, Manufacturer, Brand_Name,
                                          Generic_Name, Product_Code])
+                        # Full dates for the reliability analysis
+                        times_wr.writerow([
+                            MDR_Key,
+                            MDRFOI_fields[MDRFOI_titles.index('DATE_OF_EVENT')],
+                            MDRFOI_fields[MDRFOI_titles.index('DATE_REPORT')],
+                            MDRFOI_fields[MDRFOI_titles.index('DATE_REPORT_TO_MANUFACTURER')],
+                            MDRFOI_fields[MDRFOI_titles.index('DATE_RECEIVED')],
+                            MDRFOI_fields[MDRFOI_titles.index('DEVICE_DATE_OF_MANUFACTURE')]])
+                        if Event_Type in impact_counts:
+                            impact_counts[Event_Type] += 1
+                        else:
+                            impact_counts[Event_Type] = 1
 
                         # Remove the record from the hash to avoid duplicate records
                         device_MDR_Hash.pop(MDR_Key)
@@ -498,33 +590,66 @@ def MAUDE_Merge_Tables(start_year, end_year, FOIDEV_files, MDRFOI_files, FOIDEV_
                         # Goto the next row
                         curr_row = curr_row + 1
 
-                        # Incremental checkpoint: flush CSV and save the XLS every
+                        # Incremental checkpoint: flush CSVs and save the XLS every
                         # 50 records so a long run can survive an interruption.
                         if curr_row % 50 == 0:
                             f1.flush()
+                            ft.flush()
                             newbook.save(Excel_file)
 
     f1.close()
-    print(str(curr_row) + ' MDRFOI records cross-matched with FOIDEV records, and saved '
-          'to the XLS file.')
+    ft.close()
+    print(str(curr_row) + ' MDRFOI records cross-matched with FOIDEV records.')
     newbook.save(Excel_file)
+
+    # --- Summary (parity with download_maude_openfda.py) ---
+    print('\nWrote %s' % CSV_file)
+    print('Wrote %s' % Times_file)
+    print('Wrote %s' % Excel_file)
+    if skipped_scope:
+        print('Skipped %d reports outside scope %r.' % (skipped_scope, scope))
+    if skipped_mfr:
+        print('Skipped %d reports without an Intuitive manufacturer '
+              '(--require-intuitive).' % skipped_mfr)
+    if non_intuitive_kept:
+        total = sum(non_intuitive_kept.values())
+        print('Kept %d reports without an Intuitive manufacturer '
+              '(voluntary reports / OEM accessories; rerun with '
+              '--require-intuitive to drop them):' % total)
+        for mfr, n in sorted(non_intuitive_kept.items(), key=lambda kv: -kv[1]):
+            print('  %5d  %s' % (n, mfr))
+    print('Total reports: %d  (Malfunction=%d, Injury=%d, Death=%d, Other=%d)'
+          % (sum(impact_counts.values()), impact_counts.get('M', 0),
+             impact_counts.get('IN', 0), impact_counts.get('D', 0),
+             impact_counts.get('O', 0)))
     return AllCounts, CSV_file, Excel_file
 
 
 if __name__ == '__main__':
+    import sys
+
+    # Same flags as download_maude_openfda.py
+    scope = SCOPE
+    for arg in sys.argv[1:]:
+        if arg.startswith('--scope='):
+            scope = arg.split('=', 1)[1]
+    if scope not in ('all', 'davinci'):
+        raise SystemExit("Unknown scope %r (use --scope=all or --scope=davinci)" % scope)
+    require_intuitive = REQUIRE_INTUITIVE or '--require-intuitive' in sys.argv[1:]
+    print('Scope: %s%s' % (scope, ' (Intuitive manufacturer required)'
+                           if require_intuitive else ''))
+
     ####### Download Maude Data (uncomment to fetch the raw FDA files into data/)
     # MAUDE_Download(FOIDEV_files, MDRFOI_files, data_dir)
 
-    ####### Extract FOIDEV files for the device of interest
+    ####### Extract FOIDEV files for the device of interest (all Intuitive
+    ####### reports, including instrument/accessory events; scope filtering
+    ####### happens at merge time so both scopes share one extraction pass)
     FOIDEVExtract(FOIDEV_files, FOIDEV_Field_Numbers, device_name[0], device_keywords[0], data_dir)
     # FOIDEVExtract2(FOIDEV_files, FOIDEV_Field_Numbers, device_name[2], ['MHX'], data_dir)
 
     ####### Cross-match the MDRFOI and FOIDEV records
     AllCounts, CSV_file, Excel_file = MAUDE_Merge_Tables(
         START_YEAR, END_YEAR, FOIDEV_files, MDRFOI_files, FOIDEV_Field_Numbers,
-        MDRFOI_Field_Numbers, device_name[0], data_dir)
-
-    print('\n')
-    print('Wrote:', CSV_file)
-    print('Wrote:', Excel_file)
-    print('Check the reports that are not from Intuitive to make sure they are related to da Vinci.')
+        MDRFOI_Field_Numbers, device_name[0], data_dir,
+        scope=scope, require_intuitive=require_intuitive)
