@@ -1,0 +1,20 @@
+# Python 3 dependencies for the FDA MAUDE da Vinci analysis pipeline.
+# Install with:  pip install -r requirements.txt
+
+# --- Data collection (download_maude_data.py) ---
+requests
+beautifulsoup4
+python-dateutil
+
+# --- NLP classification (classify_malfunctions.py) ---
+nltk            # also run: python -m nltk.downloader punkt
+
+# --- Legacy Excel I/O (.xls read/write) ---
+xlrd            # reads the legacy .xls inputs
+xlwt            # writes the .xls outputs (incl. HYPERLINK formulas)
+
+# --- Reliability analysis & plotting (event_arrival_times.py) ---
+pandas
+numpy
+scipy
+matplotlib

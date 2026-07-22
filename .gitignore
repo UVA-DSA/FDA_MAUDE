@@ -1,0 +1,26 @@
+# Generated pipeline output (tables, figures, intermediate CSV/TXT)
+output/
+
+# Raw FDA MAUDE dumps fetched by download_maude_data.py
+data/foidev*.txt
+data/mdrfoi*.txt
+data/*_FOIDEV.txt
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

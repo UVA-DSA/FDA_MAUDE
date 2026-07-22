@@ -1,3 +1,10 @@
+"""NegEx negation detection.
+
+Tags negation trigger terms and the phrases they negate within a sentence,
+following the NegEx algorithm (Chapman et al.). Used by the malfunction
+classifier to discard negated mentions of keywords. Compatible with Python 3.
+"""
+
 import re
 
 def sortRules (ruleList):

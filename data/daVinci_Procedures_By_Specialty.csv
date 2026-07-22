@@ -1,0 +1,32 @@
+year,region,specialty,procedures,source
+2016,US,general_surgery,186000,Intuitive FY2018 10-K (trailing comparative)
+2017,US,general_surgery,246000,Intuitive FY2018/FY2019 10-K
+2018,US,general_surgery,325000,Intuitive FY2018/FY2019 10-K
+2019,US,general_surgery,421000,Intuitive FY2019 10-K
+2021,US,general_surgery,588000,Intuitive FY2022 10-K (trailing comparative)
+2022,US,general_surgery,720000,Intuitive FY2022 10-K
+2023,US,general_surgery,896000,Intuitive FY2023 10-K
+2024,US,general_surgery,1063000,Intuitive FY2024 10-K
+2018,US,gynecology,265000,Intuitive FY2020 10-K (trailing comparative)
+2019,US,gynecology,282000,Intuitive FY2020 10-K
+2020,US,gynecology,267000,Intuitive FY2020 10-K
+2021,US,gynecology,316000,Intuitive FY2022 10-K (trailing comparative)
+2022,US,gynecology,341000,Intuitive FY2022 10-K
+2023,US,gynecology,390000,Intuitive FY2023 10-K
+2024,US,gynecology,423000,Intuitive FY2024 10-K
+2021,US,urology,153000,Intuitive FY2022 10-K (trailing comparative)
+2022,US,urology,162000,Intuitive FY2022 10-K
+2023,US,urology,173000,Intuitive FY2023 10-K
+2024,US,urology,186000,Intuitive FY2024 10-K
+2021,OUS,urology,264000,Intuitive FY2022 10-K (trailing comparative)
+2022,OUS,urology,316000,Intuitive FY2022 10-K
+2023,OUS,urology,381000,Intuitive FY2023 10-K
+2024,OUS,urology,435000,Intuitive FY2024 10-K
+2021,OUS,general_surgery,101000,Intuitive FY2022 10-K (trailing comparative)
+2022,OUS,general_surgery,133000,Intuitive FY2022 10-K
+2023,OUS,general_surgery,188000,Intuitive FY2023 10-K
+2024,OUS,general_surgery,254000,Intuitive FY2024 10-K
+2023,OUS,gynecology,110000,Intuitive FY2023 10-K
+2024,OUS,gynecology,142000,Intuitive FY2024 10-K
+2023,US,all_specialties,1532000,Intuitive FY2024 10-K (US total)
+2024,US,all_specialties,1757000,Intuitive FY2024 10-K (US total)

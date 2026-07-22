@@ -1,9 +1,19 @@
-setwd('C:/Users/Homa Alemzadeh/Documents/My Dropbox/Failure_Analysis/JAMA_2014/Material/Stats/Python')
-#setwd('C:/Users/Homa/Dropbox/Failure_Analysis/JAMA_2014/Material/Stats/Python')
-#setwd('/Users/homa/Dropbox/Failure_Analysis/JAMA_2014/Material/Stats/Python')
-all_data <- read.csv("./daVinci_MDR_Malfunction_Impacts_2013_PLOS_One.csv", fill = TRUE); 
-setwd('C:/Users/Homa Alemzadeh/Documents/My Dropbox/Failure_Analysis/JAMA_2014/Material/Stats/Python/daVinci_Results')
-#setwd('/Users/homa/Dropbox/Failure_Analysis/JAMA_2014/Material/Stats/Python/daVinci_Results')
+# Post-hoc statistics and tables for the da Vinci MAUDE malfunction analysis.
+# Reads the classifier output (produced by src/classify_malfunctions.py) and
+# writes the paper tables back into output/. Run from the repo root or from the
+# analysis/ directory; the output directory is located relative to either.
+
+# Which classified dataset to summarize. Must match END_YEAR in
+# src/classify_malfunctions.py (set to 2013 for the original committed dataset).
+end_year <- 2025
+
+output_dir <- file.path("..", "output")
+if (!dir.exists(output_dir)) output_dir <- "output"  # allow running from repo root
+
+all_data <- read.csv(
+    file.path(output_dir,
+              paste0("daVinci_MDR_Malfunction_Impacts_", end_year, "_PLOS_One.csv")),
+    fill = TRUE)
 
 # Checked Broken cases and edited for PLOS_One
 
@@ -13,15 +23,11 @@ p_confidence_interval <- function(a, n){
 	return(CI)
 }
 
-file.create("Recent_Test.csv");
-file.create("Remaining_Malfunctions.csv");
-file.create("Table1.csv");
-file.create("Table3.csv");
-file_create("Table2.csv")
-file_create("Table4.csv")
-file_create("Table5.csv")
-file_create("Table6.csv")
-file_create("Table7.csv")
+for (fname in c("Recent_Test.csv", "Remaining_Malfunctions.csv",
+                "Table1.csv", "Table2.csv", "Table3.csv", "Table4.csv",
+                "Table5.csv", "Table6.csv", "Table7.csv")) {
+    file.create(file.path(output_dir, fname))
+}
 
 Malfunctions <- subset(all_data, Patient.Impact == "M")
 Fallen <- subset(all_data, Fallen != "N/A")
@@ -98,7 +104,7 @@ for(i in seq(1,18,2))
 #table_1[14,4]<- round((dim(subset(Class[[7]], New.Rescheduled != "N/A"))[1])/(dim(all_data)[1])*100,1)
 
 table_1
-write.csv(table_1, file = "Table1.csv")
+write.csv(table_1, file = file.path(output_dir, "Table1.csv"))
 
 # Interruptions
 interrupted <- subset(all_data, System.Reset != "N/A" | New.Converted != "N/A" | New.Rescheduled != "N/A")
@@ -211,10 +217,10 @@ for(i in seq(1,28,4))
 	table_3[i+3,12]<- table_3[i+1,12] + p_confidence_interval(table_3[i,12],table_3[i,1])
 }
 #table_3
-write.csv(table_3, file = "Table3.csv")
+write.csv(table_3, file = file.path(output_dir, "Table3.csv"))
 
-write.csv(System_Errors, file = "Recent_Test.csv")
-write.csv(Rest_Malfunctions, file = "Remaining_Malfunctions.csv")
+write.csv(System_Errors, file = file.path(output_dir, "Recent_Test.csv"))
+write.csv(Rest_Malfunctions, file = file.path(output_dir, "Remaining_Malfunctions.csv"))
 
 library(limma)
 System_Reset <- (all_data$System.Reset != 'N/A')
