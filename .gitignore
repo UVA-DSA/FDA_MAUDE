@@ -1,9 +1,12 @@
 # Generated pipeline output (tables, figures, intermediate CSV/TXT)
 output/
 
-# Raw FDA MAUDE dumps fetched by download_maude_data.py
+# Raw FDA MAUDE dumps fetched by download_maude_data.py (multi-GB, uncompressed)
 data/foidev*.txt
+data/device*.txt
+data/DEVICE*.txt
 data/mdrfoi*.txt
+data/MDRFOI*.txt
 data/*_FOIDEV.txt
 *.zip
 

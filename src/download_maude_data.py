@@ -21,6 +21,7 @@ import csv
 import os
 import re
 import time
+import zipfile
 from zipfile import ZipFile
 
 import requests
@@ -32,8 +33,11 @@ from dateutil import parser
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 
-# A shared HTTP session (replaces the urllib2 cookie-jar opener).
+# A shared HTTP session (replaces the urllib2 cookie-jar opener). The FDA server
+# returns an error page to the default python-requests User-Agent, so send a
+# browser-like one.
 session = requests.Session()
+session.headers.update({'User-Agent': 'Mozilla/5.0 (FDA MAUDE research pipeline)'})
 
 # =====================================================================
 # Configuration
@@ -44,15 +48,25 @@ END_YEAR = 2025
 # One past END_YEAR; used only to enumerate the yearly foidev<YYYY> files.
 CURRENT_YEAR = 2026
 
-# Field-number schemas (1-based, per the FDA file layout docs).
-# Pre-2009 DEVICE/MDRFOI layout (used for the original 2000-2013 study):
+# Field-number schemas (1-based column positions in the FDA pipe-delimited files).
+# The downstream code selects DEVICE columns positionally (Brand=idx2, Generic=idx3,
+# Manufacturer=idx4, Product_Code=idx6) and MDRFOI columns by NAME, so each list
+# below must keep that DEVICE ordering and must include every MDRFOI column the
+# code looks up by name (MDR_REPORT_KEY, EVENT_TYPE, the date fields, ...).
+#
+# Pre-2009 FOIDEV/MDRFOI layout (used for the original 2000-2013 study):
 FOIDEV_FIELDS_PRE2009 = [1, 2, 7, 8, 9, 19, 26, 27, 29, 30, 31, 34, 36, 44]
 MDRFOI_FIELDS_PRE2009 = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 14, 16, 17, 25, 26, 27, 28, 30, 31,
                          32, 68, 69, 70, 72, 75]
-# Current layout (2014+):
-FOIDEV_FIELDS_CURRENT = [1, 2, 7, 8, 9, 19, 26, 27, 28]
-MDRFOI_FIELDS_CURRENT = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 14, 16, 17, 18, 19, 20, 22, 50, 51,
-                         53, 56, 65, 74, 75]
+# Current DEVICE file layout (device<YYYY>.zip, 34 cols) verified against the FDA
+# files, Jul 2026: MDR_REPORT_KEY=1, DATE_RECEIVED=9, BRAND_NAME=10,
+# GENERIC_NAME=11, MANUFACTURER_D_NAME=12, DEVICE_REPORT_PRODUCT_CODE=29.
+FOIDEV_FIELDS_CURRENT = [1, 2, 10, 11, 12, 9, 29]
+# Current MDRFOI file layout (mdrfoi*.zip, 86 cols) verified Jul 2026:
+# MDR_REPORT_KEY=1, NUMBER_DEVICES=6, NUMBER_PATIENTS=7, DATE_RECEIVED=8,
+# DATE_REPORT=11, DATE_OF_EVENT=12, DATE_REPORT_TO_MANUFACTURER=22,
+# DEVICE_DATE_OF_MANUFACTURE=52, EVENT_TYPE=57, MANUFACTURER_NAME=66.
+MDRFOI_FIELDS_CURRENT = [1, 3, 4, 6, 7, 8, 11, 12, 22, 52, 57, 66]
 
 # Select the layout to use for this run.
 FOIDEV_Field_Numbers = FOIDEV_FIELDS_CURRENT
@@ -72,9 +86,12 @@ device_keywords = [['da vinci', 'davinci', 'da-vinci', 'da vinchi', 'davinchi',
                     'intuitive surgical operations'], ['pacemaker']]
 data_dir = DATA_DIR
 
-# FDA source filenames (downloaded/extracted into data/).
-FOIDEV_files = ['foidev' + str(y) for y in range(START_YEAR, CURRENT_YEAR)] + \
-    ['foidevchange', 'foidev']
+# FDA source filenames (downloaded/extracted into data/). The FDA renamed the
+# yearly DEVICE files from "foidev<YYYY>" to "device<YYYY>" (the old foidev<YYYY>
+# files stop after ~2018); "device" (current partial year) and "devicechange"
+# carry the latest updates.
+FOIDEV_files = ['device' + str(y) for y in range(START_YEAR, CURRENT_YEAR)] + \
+    ['devicechange', 'device']
 # The cumulative "thru" file plus the current partial-year files. Adjust the
 # exact names to whatever the FDA FTP area currently publishes.
 MDRFOI_files = ['mdrfoithru' + str(END_YEAR), 'mdrfoi', 'mdrfoichange']
@@ -91,13 +108,20 @@ def FieldExtract(line, field_numbers):
 
 ###### Download the data files from MAUDE database and save it
 def MAUDE_Download(FOIDEV_files, MDRFOI_files, data_dir):
-    MAUDE_url = 'http://www.accessdata.fda.gov/MAUDE/ftparea/'
+    MAUDE_url = 'https://www.accessdata.fda.gov/MAUDE/ftparea/'
     # Download all FOIDEV and MDRFOI files
     for filename in FOIDEV_files + MDRFOI_files:
         zip_path = os.path.join(data_dir, filename + '.zip')
-        # Download the Zip file
+        # Download the Zip file (stream to disk; these are up to ~700 MB each)
+        resp = session.get(MAUDE_url + filename + '.zip', timeout=600, stream=True)
+        resp.raise_for_status()
         with open(zip_path, 'wb') as zfile:
-            zfile.write(session.get(MAUDE_url + filename + '.zip').content)
+            for chunk in resp.iter_content(chunk_size=1 << 20):
+                zfile.write(chunk)
+        # Sanity-check that we actually got a zip (not an HTML error page)
+        if not zipfile.is_zipfile(zip_path):
+            os.remove(zip_path)
+            raise RuntimeError('Not a zip (server error?) for %s.zip' % filename)
         # Extract the Zip file
         ZipFile(zip_path, 'r').extractall(data_dir)
         # Clean up the folder by deleting the Zip file
