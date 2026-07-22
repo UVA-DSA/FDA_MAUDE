@@ -1,11 +1,11 @@
 """Post-hoc statistics and tables for the da Vinci MAUDE malfunction analysis.
 
-Python/pandas port of analysis/malfunctions.R. Reads the classifier output
+Python/pandas port of src/malfunctions.R. Reads the classifier output
 (produced by src/classify_malfunctions.py) and writes the paper tables back
-into output/. Run from the repo root or from the analysis/ directory; the
+into output/. Run from the repo root or from the src/ directory; the
 output directory is located relative to either.
 
-    python analysis/malfunctions.py
+    python src/malfunctions.py
 
 Produces Table1.csv (malfunction impacts) and Table3.csv (surgery classes),
 writes the System_Errors and remaining-malfunctions subsets, prints the
@@ -24,7 +24,7 @@ import pandas as pd
 # src/classify_malfunctions.py (set to 2013 for the original committed dataset).
 END_YEAR = 2025
 
-# --- Locate the output directory (works from repo root or analysis/) ---
+# --- Locate the output directory (works from repo root or src/) ---
 output_dir = os.path.join('..', 'output')
 if not os.path.isdir(output_dir):
     output_dir = 'output'

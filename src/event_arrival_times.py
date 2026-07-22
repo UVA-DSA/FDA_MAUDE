@@ -39,8 +39,16 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 START_YEAR = 2014
 END_YEAR = 2025
 
+# Time and class inputs. The legacy pipeline produced .xls workbooks; the
+# openFDA route produces CSVs (xls caps at 65,536 rows). Prefer the .xls when it
+# exists (original 2013 dataset), else fall back to the CSV counterparts.
 Excel_In = os.path.join(DATA_DIR, 'daVinci_MAUDE_Data_' + str(END_YEAR) + '.xls')
+if not os.path.exists(Excel_In):
+    Excel_In = os.path.join(DATA_DIR, 'daVinci_MAUDE_Times_' + str(END_YEAR) + '.csv')
 Excel_In2 = os.path.join(DATA_DIR, 'daVinci_MAUDE_Classified_' + str(END_YEAR) + '.xls')
+if not os.path.exists(Excel_In2):
+    Excel_In2 = os.path.join(BASE_DIR, 'output',
+                             'daVinci_MDR_Malfunction_Impacts_' + str(END_YEAR) + '_PLOS_One.csv')
 CSV_TTE = os.path.join(OUTPUT_DIR, 'All_Failure_Times_Classes.csv')
 CSV_Out = 'Results.csv'
 
@@ -77,6 +85,27 @@ def load_procedure_window(start_year, end_year):
     return 2004, 2013, list(_PROC_2004_2013)
 
 
+def load_table(filename, sheet=None):
+    """Return (header, rows) from an .xls sheet or a .csv file.
+
+    The legacy pipeline stored the merged MAUDE data in .xls workbooks; the
+    openFDA route writes CSVs instead (xls caps at 65,536 rows). Values are
+    returned as strings either way.
+    """
+    if filename.lower().endswith('.csv'):
+        with open(filename, newline='', encoding='latin-1') as f:
+            reader = csv.reader(f)
+            header = next(reader)
+            rows = [[str(c) for c in r] for r in reader]
+        return header, rows
+    databook = xlrd.open_workbook(filename)
+    datasheet = databook.sheet_by_name(sheet) if sheet else databook.sheet_by_index(0)
+    header = [datasheet.cell_value(0, i) for i in range(datasheet.ncols)]
+    rows = [[str(datasheet.cell_value(r, i)) for i in range(datasheet.ncols)]
+            for r in range(1, datasheet.nrows)]
+    return header, rows
+
+
 def get_ttf(time_filename, class_filename, out_filename):
     # Prepare the output file
     f1 = open(out_filename, 'w', newline='')
@@ -91,35 +120,24 @@ def get_ttf(time_filename, class_filename, out_filename):
                     + fieldnames[1:])
 
     # Get the malfunction classes and store them in a hash
-    databook = xlrd.open_workbook(class_filename)
-    datasheet = databook.sheet_by_name('sheet1')
-    data_cols = datasheet.ncols
-    data_rows = datasheet.nrows
-    fieldindex = {'MDR_Key': 0}
+    class_header, class_rows = load_table(class_filename, sheet='sheet1')
+    fieldindex = {}
     # Find the column index of each field in the class file
-    for i in range(0, data_cols):
-        col = datasheet.cell_value(0, i)
-        for f in fieldnames:
-            if col == f:
-                fieldindex[f] = i
+    for i, col in enumerate(class_header):
+        if col in fieldnames:
+            fieldindex[col] = i
+    fieldindex.setdefault('MDR_Key', 0)
     # Make a hash of the malfunction classes found
     classHash = {'MDR_Key': []}
-    for i in range(1, data_rows):
-        MDR_Key = str(datasheet.cell_value(i, fieldindex['MDR_Key']))
-        row = []
-        for f in fieldnames[1:]:
-            row.append(str(datasheet.cell_value(i, fieldindex[f])))
-        classHash[MDR_Key] = row
+    for r in class_rows:
+        MDR_Key = r[fieldindex['MDR_Key']]
+        classHash[MDR_Key] = [r[fieldindex[f]] for f in fieldnames[1:]]
     print('Hashed the malfunction classes..')
 
     # Get the field indices for time information
-    databook = xlrd.open_workbook(time_filename)
-    datasheet = databook.sheet_by_name('Maude_Data')
-    data_cols = datasheet.ncols
-    data_rows = datasheet.nrows
+    time_header, time_rows = load_table(time_filename, sheet='Maude_Data')
     # Find the column numbers for the time information
-    for i in range(0, data_cols):
-        col = datasheet.cell_value(0, i)
+    for i, col in enumerate(time_header):
         if col == 'MDR_REPORT_KEY':
             MDR_Key_Index = i
         elif col == 'DATE_OF_EVENT':
@@ -144,15 +162,15 @@ def get_ttf(time_filename, class_filename, out_filename):
 
     All_TTES = []
     not_found = 0
-    for i in range(1, data_rows):
+    for r in time_rows:
         Time_to_Event = -1
         TTES = []
-        MDR_Key = str(datasheet.cell_value(i, MDR_Key_Index))
-        Event_DateStr = str(datasheet.cell_value(i, Event_Date_Index))
-        Report_DateStr = str(datasheet.cell_value(i, Report_Date_Index))
-        ToManufacture_DateStr = str(datasheet.cell_value(i, ToManufacture_Date_Index))
-        Received_DateStr = str(datasheet.cell_value(i, Received_Date_Index))
-        Manufactured_DateStr = str(datasheet.cell_value(i, Manufactured_Date_Index))
+        MDR_Key = r[MDR_Key_Index]
+        Event_DateStr = r[Event_Date_Index]
+        Report_DateStr = r[Report_Date_Index]
+        ToManufacture_DateStr = r[ToManufacture_Date_Index]
+        Received_DateStr = r[Received_Date_Index]
+        Manufactured_DateStr = r[Manufactured_Date_Index]
 
         # If date of event is available and is after the start year
         if Event_DateStr != '':

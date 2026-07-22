@@ -10,6 +10,11 @@ data/MDRFOI*.txt
 data/*_FOIDEV.txt
 *.zip
 
+# Regenerable openFDA pulls (the 2025 data CSV is ~150 MB — over GitHub's limit;
+# re-create with: python src/download_maude_openfda.py)
+data/daVinci_MAUDE_Data_2025*.csv
+data/daVinci_MAUDE_Times_*.csv
+
 # Python
 __pycache__/
 *.py[cod]

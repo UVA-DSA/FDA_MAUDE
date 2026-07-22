@@ -1024,9 +1024,12 @@ for row in csv_rd1:
                     Moved, Arced, Broken, Tip_Cover, Vision, Power, Other]
     # Write to CSV file
     csv_wr.writerow(response)
-    # Write to Excel file
-    for k in range(0, len(response)):
-        worksheet.write(chk_sum, k, str(response[k]))
+    # Write to Excel file (.xls caps at 65,536 rows; the CSV always has all rows)
+    if chk_sum <= 65535:
+        for k in range(0, len(response)):
+            worksheet.write(chk_sum, k, str(response[k]))
+    elif chk_sum == 65536:
+        print('\nWarning: row limit of .xls reached; remaining rows are in the CSV only.')
     # Save the data for current row
     all_data.append(response)
     chk_sum += 1

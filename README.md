@@ -33,14 +33,14 @@ FDA_MAUDE/
 ├── LICENSE                     # GPL-3.0
 ├── requirements.txt
 ├── src/                        # Python 3 pipeline
-│   ├── download_maude_data.py  #  1. scrape + merge FDA FOIDEV/MDRFOI records
+│   ├── download_maude_openfda.py# 1. pull da Vinci reports via the openFDA API (recommended)
+│   ├── download_maude_data.py  #  1-alt. bulk-dump + per-report HTML scraping (legacy)
 │   ├── classify_malfunctions.py#  2. classify malfunctions & impacts from text
 │   ├── event_arrival_times.py  #  3. reliability / time-between-failure analysis
 │   ├── fetch_procedure_data.py #     scrape annual da Vinci procedure counts (SEC EDGAR)
-│   └── negex.py                #     NegEx negation-detection helper
-├── analysis/
 │   ├── malfunctions.py         #  4. statistics, paper tables, Venn counts (pandas)
-│   └── malfunctions.R          #     original R version of step 4
+│   ├── malfunctions.R          #     original R version of step 4
+│   └── negex.py                #     NegEx negation-detection helper
 ├── data/                       # merged MAUDE data + classified spreadsheets
 │   ├── daVinci_MAUDE_Data_2013.csv / .xls
 │   ├── daVinci_MAUDE_Classified_2000_2013.xls
@@ -82,11 +82,12 @@ so they can be run from anywhere. Run them in order:
 
 | Step | Command | Purpose |
 |------|---------|---------|
-| 1 | `python src/download_maude_data.py` | Download the FDA DEVICE/MDRFOI dumps, filter da Vinci records, scrape per-report narratives, and write `data/daVinci_MAUDE_Data_<END_YEAR>.csv/.xls`. |
+| 1 | `python src/download_maude_openfda.py` | **Recommended.** Pull every Intuitive/da Vinci adverse-event report (with narratives) from the openFDA `device/event` API and write `data/daVinci_MAUDE_Data_<END_YEAR>.csv` + `daVinci_MAUDE_Times_<END_YEAR>.csv`. ~99k reports for 2014–2025 in minutes. `--scope=davinci` keeps only reports whose device names mention da Vinci; the default `--scope=all` also keeps Intuitive's instrument/accessory brands (EndoWrist etc. — ~5× more reports in instrument-heavy years). Neither scope exactly reproduces the committed 2000–2013 selection; see the script docstring for the validated 2013 comparison. `--require-intuitive` additionally drops the small tail of reports without an Intuitive manufacturer on file (voluntary reports, OEM accessories); by default they are kept and itemized in the run summary. |
+| 1 (alt) | `python src/download_maude_data.py` | Legacy route: download the FDA DEVICE/MDRFOI bulk dumps (~5 GB), filter da Vinci records, then scrape each report's narrative from the MAUDE website (~0.5 s/report — many hours at 2014–2025 volumes). |
 | 2 | `python src/classify_malfunctions.py` | Classify each report's malfunction type and impact from its Event/Narrative text; write `output/daVinci_MDR_Malfunction_Impacts_<END_YEAR>_PLOS_One.csv` and `data/daVinci_MAUDE_Classified_<END_YEAR>.xls`. |
 | 3 | `python src/event_arrival_times.py` | Compute time-between-failure, mean inter-arrival time, and the Laplace trend test; render the cumulative-malfunction figures into `output/`. |
-| 4 | `python analysis/malfunctions.py` | Produce the paper's summary tables (`output/Table1.csv`, `Table3.csv`), the malfunction subsets, and the Venn combination-count tables. A pandas port of the R script below — this is the recommended option. |
-| 4 (alt) | `Rscript analysis/malfunctions.R` | Original R version of step 4. Produces the same tables plus Venn diagrams; requires the R package `limma`. |
+| 4 | `python src/malfunctions.py` | Produce the paper's summary tables (`output/Table1.csv`, `Table3.csv`), the malfunction subsets, and the Venn combination-count tables. A pandas port of the R script below — this is the recommended option. |
+| 4 (alt) | `Rscript src/malfunctions.R` | Original R version of step 4. Produces the same tables plus Venn diagrams; requires the R package `limma`. |
 
 ### Choosing the analysis window (2014–2025 vs. the original 2000–2013)
 
@@ -98,7 +99,7 @@ years match:
 - `src/download_maude_data.py` → `START_YEAR = 2014`, `END_YEAR = 2025`, `CURRENT_YEAR = 2026`
 - `src/classify_malfunctions.py` → `END_YEAR = 2025`
 - `src/event_arrival_times.py` → `START_YEAR = 2014`, `END_YEAR = 2025`
-- `analysis/malfunctions.py` and `analysis/malfunctions.R` → `END_YEAR = 2025`
+- `src/malfunctions.py` and `src/malfunctions.R` → `END_YEAR = 2025`
 
 To reproduce the original study on the committed dataset instead, set these back
 to `START_YEAR = 2000` / `END_YEAR = 2013`.

@@ -1,7 +1,7 @@
 # Post-hoc statistics and tables for the da Vinci MAUDE malfunction analysis.
 # Reads the classifier output (produced by src/classify_malfunctions.py) and
 # writes the paper tables back into output/. Run from the repo root or from the
-# analysis/ directory; the output directory is located relative to either.
+# src/ directory; the output directory is located relative to either.
 
 # Which classified dataset to summarize. Must match END_YEAR in
 # src/classify_malfunctions.py (set to 2013 for the original committed dataset).
