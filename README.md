@@ -1,4 +1,4 @@
-# FDA MAUDE — Safety Analysis of da Vinci Robotic Surgical Systems
+# FDA MAUDE — Safety Analysis of Robotic Surgical Systems
 
 Automated collection of adverse-event reports related to robotic surgical
 systems from the **FDA MAUDE** database, and extraction of safety-related
