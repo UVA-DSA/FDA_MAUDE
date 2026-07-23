@@ -10,6 +10,8 @@ Ported from Python 2 to Python 3. Requires: nltk (with the 'punkt' tokenizer),
 xlwt, plus the local negex module.
 """
 
+import atexit
+import contextlib
 import csv
 import os
 import re
@@ -17,7 +19,7 @@ import sys
 import time
 
 import nltk
-import xlwt
+import pandas as pd
 
 from negex import sortRules, negTagger
 
@@ -54,67 +56,15 @@ daVinci = 1
 # Which MAUDE dataset to classify. This must match the end year used by
 # download_maude_data.py. Set END_YEAR = 2013 to analyze the original committed
 # dataset instead of a freshly downloaded 2014-2025 one.
-END_YEAR = 2025
+END_YEAR = int(os.environ.get('END_YEAR', 2025))
 
 Pre_CSV_In = os.path.join(DATA_DIR, 'Pre_daVinci_Impacts_2013.csv')
 CSV_In = os.path.join(DATA_DIR, 'daVinci_MAUDE_Data_' + str(END_YEAR) + '.csv')
 CSV_Out = os.path.join(OUTPUT_DIR,
                        'daVinci_MDR_Malfunction_Impacts_' + str(END_YEAR) + '_PLOS_One.csv')
-Excel_Out = os.path.join(DATA_DIR, 'daVinci_MAUDE_Classified_' + str(END_YEAR) + '.xls')
+Excel_Out = os.path.join(DATA_DIR, 'daVinci_MAUDE_Classified_' + str(END_YEAR) + '.xlsx')
 
-f0 = open(CSV_In, 'r', newline='', encoding='latin-1')
-csv_rd1 = csv.reader(f0, dialect='excel', delimiter=',')
-
-pre_f0 = open(Pre_CSV_In, 'r', newline='', encoding='latin-1')
-pre_csv_rd1 = csv.reader(pre_f0, dialect='excel', delimiter=',')
-
-f0_1 = open(os.path.join(DATA_DIR, 'Injuries_Malfunctions.csv'), 'r', newline='', encoding='latin-1')
-csv_rd2 = csv.reader(f0_1, dialect='excel', delimiter=',')
-f0_2 = open(os.path.join(DICT_DIR, 'Surgery_Class_Dictionary.csv'), 'r', newline='',
-            encoding='latin-1')
-surgery_dict = csv.reader(f0_2, dialect='excel', delimiter=',')
-f0_3 = open(os.path.join(DICT_DIR, 'MDR_Key_Surgery_Class_Dictionary.csv'), 'r', newline='',
-            encoding='latin-1')
-surgery_dict2 = csv.reader(f0_3, dialect='excel', delimiter=',')
-
-# CSV output file
-f1 = open(CSV_Out, 'w', newline='')
-csv_wr = csv.writer(f1, dialect='excel', delimiter=',')
-f2 = open(os.path.join(OUTPUT_DIR, 'Da_Vinci_MDR_Malfunction_TempResults2.csv'), 'w', newline='')
-csv_wr2 = csv.writer(f2, dialect='excel', delimiter=',')
-f3 = open(os.path.join(OUTPUT_DIR, 'Da_Vinci_MDR_Malfunction_TempResults3.csv'), 'w', newline='')
-csv_wr3 = csv.writer(f3, dialect='excel', delimiter=',')
-f4 = open(os.path.join(OUTPUT_DIR, 'Difference.csv'), 'w', newline='')
-csv_wr4 = csv.writer(f4, dialect='excel', delimiter=',')
-f5 = open(os.path.join(OUTPUT_DIR, 'Negations.txt'), 'w')
-f6 = open(os.path.join(OUTPUT_DIR, 'System_Errors.txt'), 'w')
-f7 = open(os.path.join(OUTPUT_DIR, 'Possible_Error_Codes.txt'), 'w')
-f8 = open(os.path.join(OUTPUT_DIR, 'TestErrorCodes.txt'), 'w')
-f9 = open(os.path.join(OUTPUT_DIR, 'TestInstruments.txt'), 'w')
-
-# Excel output file titles
-
-column_titles = ['MDR_Key', 'Narrative', 'Event', 'Patient Impact', 'Outcome', 'Injuries',
-                 'Manufacturer', 'Brand_Name', 'Generic_Name', 'Product_Code',
-                 'Manufacture_Year', 'Event_Year', 'Corrected_Event_Year', 'Report_Year',
-                 'Time_to_Event', 'Time_to_Report',
-                 'Surgery_Type', 'Surgery_Class', 'New Converted', 'New Rescheduled',
-                 'System Reset', 'Fallen', 'System Error',
-                 'Moved', 'Arced', 'Broken', 'Tip Cover', 'Vision', 'Power', 'Other']
-
-
-csv_wr.writerow(column_titles)
-csv_wr2.writerow(['MDR_Key', 'Narrative', 'Event', 'Patient Impact', 'Temp'])
-csv_wr3.writerow(['MDR_Key', 'Narrative', 'Event', 'Patient Impact', 'Temp'])
-
-workbook = xlwt.Workbook("iso-8859-2")
-worksheet = workbook.add_sheet('sheet1')
-column = 0
-for c in column_titles:
-    worksheet.write(0, column, c)
-    column = column + 1
-
-# Dictionaries
+# Dictionaries / Keywords
 Typoed_MDRs = ['349101', '626290', '1609392', '2113223', '1227009', '1063554', '1063553',
                '2466842', '699291', '3530681', '3360375', '3215594', '3021230', '2861342',
                '2402556', '2343127', '2209897', '1832491', '1707868', '1707868', '1695569',
@@ -127,7 +77,7 @@ Other_Missed = ['2504745', '1735914', '933211', '870229', '2120175', '1466302', 
 Injury_Keywords = ['injury', 'injuries', 'injured', 'torn', 'tear to', 'tear on', 'burn',
                    'puncture', 'perforation', 'laceration', 'lacerated', 'damage to',
                    'organ damage', 'damaged', 'avulsion', 'rupture', 'repture', ' necrosis',
-                   'hole in', 'mark']  # , 'bleed']
+                   'hole in', 'mark']
 Body_Keywords = ['patient', ' pt', 'artery', 'tissue', ' vein', ' skin', 'vessel', 'cavity',
                  ' uterus', ' liver', 'kidney', 'tounge', ' bowel', 'abdomen', 'abdomin',
                  ' colon', 'ovarian tube', 'bladder', ' pelvis', 'intestines', ' anatomy',
@@ -202,7 +152,6 @@ fallen_keywords2 = {('fall', 'V'), ('fallen', 'V'), ('fell', 'V'), ('falling', '
                     ('pt', 'NN'), ('patient', 'NN'), ('user', 'NN'), ('abdomen', 'NN')}
 fallen_keywords3 = {'retrieved', 'removed from the'}
 peice_keywords = {'piece', 'fragment', 'shredding', 'object', 'broken', 'component', 'tip'}
-# To exclude from what is observed in the patient when looking for fallen cases
 burn_keywords = {'spark', 'sparking', 'burn', 'burning', 'arcing', 'arc', 'blood', 'injury',
                  'hole', 'char'}
 
@@ -249,30 +198,33 @@ Digit_Table = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
                'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90,
                'an': 1, 'half': 0.5, '1/2': 0.5, '~1': 1, '~30': 30}
 
+EMPTY_PRE = ['N/A'] * 8
+
+# Global resources and placeholders
+f5 = None
+f6 = None
+f8 = None
+csv_wr2 = None
+Pre_Data = None
+Surgery_Dictionary = None
+Surgery_Class_Hash = None
+all_inst_postfix = []
+Error_Code_List = {}
+
 
 def negex_negated(s, keyword):
-    """Return True if NegEx tags `keyword` as negated within sentence `s`.
-
-    Uses the loaded NegEx trigger rules (negP=False -> only definite pre/post
-    negations, not 'possible' ones). Returns False if NegEx is disabled or the
-    rules are unavailable.
-    """
+    """Return True if NegEx tags `keyword` as negated within sentence `s`."""
     if not (USE_NEGEX and irules):
         return False
     try:
         tagger = negTagger(sentence=s, phrases=[keyword], rules=irules, negP=False)
         return tagger.getNegationFlag() == 'negated'
     except Exception:
-        # Never let a NegEx edge case abort the classification run.
         return False
 
 
-# Works as good as NegEx, it only doesn't consider these cases:
-# "..., but" ".., however" "cannot be certain if ..." "cannot be determined if..."
-# Handles the cases with "Nothing" that NegEx cannot handle.
-# NegEx (negex_negated) is consulted as a supplementary check for anything the
-# heuristic below misses.
 def negation_check(s, keyword):
+    global f5
     loc = s.find(keyword)
     if s[0:loc - 1].find('and') > 0:
         sub_s = s[s[0:loc - 1].find('and') + 3:loc + 5]
@@ -282,120 +234,32 @@ def negation_check(s, keyword):
         sub_s = s[s[0:loc - 1].find(';') + 1:loc + 5]
     else:
         sub_s = s[0:loc + 5]
-    # Split the sentence to words
+    
     regex = re.compile('[%s]' % re.escape('!"#$%&\'()*+,./:;<=>?@[\\]^_`{|}~'))
     Cs = regex.sub(' ', sub_s).lower()
     Ws = Cs.split(' ')
     for w in Ws:
         for n in negation_keywords:
             if w == n:
-                f5.write(sub_s + '\n')
+                if f5 is not None:
+                    f5.write(sub_s + '\n')
                 return True
-    # Fall back to NegEx for cases the heuristic above does not catch.
     return negex_negated(s, keyword)
 
 
-# Make the tables of injury_malfunctions hash
-IN_MALFUNC = {'MDR_Key': 'Malfuncion_Class'}
-for row in csv_rd2:
-    IN_MALFUNC[row[0]] = row[1]
+def clean_for_excel(val):
+    if isinstance(val, str):
+        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', val)
+    elif isinstance(val, list):
+        return [clean_for_excel(x) for x in val]
+    return val
 
-# Make a hash for the previous classified data
-Pre_Data = {'MDR_Key': []}
-for row in pre_csv_rd1:
-    Pre_Data[row[0]] = [row[20], row[21], row[22], row[23], row[24], row[25], row[26], row[27]]
-# Default carry-forward row for MDR keys not present in the previous dataset
-# (e.g. new 2014-2025 records) so lookups below never raise KeyError.
-EMPTY_PRE = ['N/A'] * 8
 
-# Make the tables of surgery classes
-Surgery_Dictionary = []
-for row in surgery_dict:
-    Surgery_Dictionary.append([row[0], row[1].strip()])
+# =====================================================================
+# Modular Classification Helpers
+# =====================================================================
 
-Surgery_Class_Hash = {'MDR_Key': ['Surgery Class', 'Surgery_Type']}
-for row in surgery_dict2:
-    Surgery_Class_Hash[row[0]] = [row[2], row[1]]
-
-# Initialize
-Error_Code_List = {'Error Code': (0, 'Description')}
-all_data = []
-all_inst_postfix = []
-all_broken = []
-chk_sum = 1
-legal_count = 0
-prior_count = 0
-# Get the total number of records to read
-NRows = len(list(csv_rd1))
-RStep = max(1, NRows // 10)
-# Go to the begining
-f0.seek(0)
-title = next(csv_rd1)
-# Iterate over all MDR keys
-for row in csv_rd1:
-    if daVinci == 0:
-        MDR_Key = row[1]
-        Surgery_Keyword = row[2]
-        Event = row[3]
-        Narrative = row[4]
-        Impact = row[5]
-        Outcome = row[6]
-        Manufacture_Year = row[7]
-        Event_Year = row[8]
-        Report_Year = row[9]
-        Time_to_Event = row[10]
-        Time_to_Report = row[11]
-        Manufacturer = row[12]
-        Brand_Name = row[13]
-        Generic_Name = row[14]
-        Product_Code = row[15]
-    else:
-        MDR_Key = row[1]
-        Event = row[2]
-        Narrative = row[3]
-        Impact = row[4]
-        Outcome = row[5]
-        Manufacture_Year = row[6]
-        Event_Year = row[7]
-        Report_Year = row[10]
-        Time_to_Event = row[11]
-        Time_to_Report = row[12]
-        Manufacturer = row[13]
-        Brand_Name = row[14]
-        Generic_Name = row[15]
-        Product_Code = row[16]
-
-    # Correct missing Event Years based on Report Year
-    if (Event_Year == 'N/A') or (Event_Year == '') or (Event_Year == ' '):
-        Corrected_Event_Year = Report_Year
-    else:
-        Corrected_Event_Year = Event_Year
-
-    # Clean up the Narrative and Event text (Remove punctuations)
-    regex = re.compile('[%s]' % re.escape('!"#$%&\'()*+,./:;<=>?@[\\]^_`{|}~'))
-    CNarrative = ' '.join(regex.sub(' ', Narrative).lower().split())
-    CEvent = ' '.join(regex.sub(' ', Event).lower().split())
-    # Split the Narrative and Event text into words
-    WNarrative = CNarrative.split(' ')
-    WEvent = CEvent.split(' ')
-    # Split the Narrative and Event text into sentences
-    SNarrative = Narrative.lower().split('.')
-    SEvent = Event.lower().split('.')
-
-    # Default Value for Other
-    Other = 'N/A'
-
-#### Brand Name Categories for Cardiac Procedures
-    Device_Category = 'Other'
-    if daVinci == 0:
-        for k in Cardiac_Instruments:
-            if Generic_Name.lower().find(k) > -1:
-                Device_Category = k
-                print('Category =' + k)
-                break
-
-#### Class and type of surgery
-#### It is important to do this sentence by sentence, to make sure the first keyword is captured
+def classify_surgery(SEvent, Narrative, WEvent, MDR_Key):
     Surgery_Type = ''
     Surgery_Class = 'N/A'
     Cardiac_Type = 'N/A'
@@ -418,12 +282,10 @@ for row in csv_rd1:
                 Surgery_Class = SC
 
     if Surgery_Class == 'N/A':
-        # Check previously had some records classified but I am missing them in this version?
         if (MDR_Key in Surgery_Class_Hash and
                 Surgery_Class_Hash[MDR_Key][0] != 'N/A' and Surgery_Class_Hash[MDR_Key][1] != 'tors'):
             print(MDR_Key + ': ' + Surgery_Class_Hash[MDR_Key][0] + ' - '
                   + Surgery_Class_Hash[MDR_Key][1])
-        # Check for other types of surgery that we didn't consider in our dictionary
         if WEvent.count('procedure') > 0:
             procedure_index = WEvent.index('procedure')
             if not (WEvent[procedure_index - 1] in surgery_stop_adjs):
@@ -469,19 +331,18 @@ for row in csv_rd1:
     elif MDR_Key in ['3385079', '3473319', '3128668']:
         Surgery_Class = 'Head and Neck'
 
-#### Misscategorized Injuries
+    return Surgery_Type, Surgery_Class, Cardiac_Type
+
+
+def reclassify_injury(MDR_Key, Impact, SEvent):
     Injuries = []
     found = 0
-    # If there is a injury keyword in those that are D or IN and if it is not in the filtered list
     if (Impact != 'D') and (Impact != 'IN') and (MDR_Key not in Typoed_MDRs):
-        Pre_Impact = Impact
         for s in SEvent:
             for IK in Injury_Keywords:
                 if (s.find(IK) > -1) and not (negation_check(s, IK)):
-                    # For injury keywords it is enough to see them
                     if (IK.find('injur') > -1) or (IK.find('bleed') > -1):
                         found = 1
-                    # For the cut, the mistake keyword should be before and the patient keyword after
                     elif IK.find('cut') > -1:
                         cut_index = s.find('cut')
                         for B in Body_Keywords:
@@ -490,11 +351,9 @@ for row in csv_rd1:
                                     if s[cut_index - 20:cut_index].find(I) > -1:
                                         found = 1
                                         break
-                    # For others we also need to have patient involved.
                     else:
                         for B in Body_Keywords:
                             if s.find(B) > -1:
-                                # For the damage to and puncture to, patient's keyword should be after
                                 if ((IK.find('to') > -1 or IK.find('on') > -1 or
                                      IK.find('in') > -1 or IK.find('ed') > -1) and
                                         (s.find(B) - s.find(IK) <= 40) and (s.find(IK) < s.find(B))):
@@ -517,38 +376,26 @@ for row in csv_rd1:
                         break
             if found == 1:
                 break
+    return Injuries
 
-    # If found any of the injury keywords, reclassify the event to Injury
-    if len(Injuries) > 0:
-        missed_injuries = missed_injuries + 1
-        Impact = 'IN'
-    elif MDR_Key in Other_Missed:
-        missed_injuries = missed_injuries + 1
-        Injuries.append('bleed')
-        Impact = 'IN'
-    elif MDR_Key == '2559247':
-        Impact = 'D'
 
-#### System Error?
+def classify_system_error(SEvent, SNarrative, CEvent, CNarrative, MDR_Key, f6, f8):
+    global Error_Code_List
     System_Error = 'N/A'
     Curr_Error_Codes = []
     for s in SEvent:
         s_digits = []
         s_nodigit = ' '.join(''.join([i for i in s if not i.isdigit()]).split())
-        # Look for any system errors
         for keyword in error_keywords:
-            # Check if the term is negated
             if (((s.find(keyword) != -1) and not (negation_check(s, keyword))) or
                     ((s_nodigit.find(keyword) != -1) and not (negation_check(s_nodigit, keyword)))):
                 if System_Error == 'N/A':
                     System_Error = keyword
-                # Getting any possible error codes
                 kindex = s.find(keyword)
                 s_digits = (re.findall(r'\d+', s[kindex - 10:kindex - 1]) +
                             re.findall(r'\d+', s[kindex + len(keyword):kindex + len(keyword) + 10]))
                 if s_digits is not None:
                     for EC in s_digits:
-                        # If we didn't already see this error code before
                         if Curr_Error_Codes.count(EC) == 0:
                             Curr_Error_Codes.append(EC)
                             if EC in Error_Code_List:
@@ -560,27 +407,23 @@ for row in csv_rd1:
                 break
         if System_Error != 'N/A':
             break
-    # If not found in Event, search in Narrative
+
     if System_Error == 'N/A':
         for s in SNarrative:
             s_digits = []
             s_nodigit = ' '.join(''.join([i for i in s if not i.isdigit()]).split())
-            # Look for any system errors
             for keyword in error_keywords2:
-                # Check if the term is negated
                 if (((s.find(keyword) != -1) and not (negation_check(s, keyword))) or
                         ((s_nodigit.find(keyword) != -1) and
                          not (negation_check(s_nodigit, keyword)))):
                     if System_Error == 'N/A':
                         System_Error = 'N ' + keyword
-                    # Getting any possible error codes
                     kindex = s.find(keyword)
                     s_digits = (re.findall(r'\d+', s[kindex - 10:kindex - 1]) +
                                 re.findall(r'\d+',
                                            s[kindex + len(keyword):kindex + len(keyword) + 10]))
                     if s_digits is not None:
                         for EC in s_digits:
-                            # If we didn't already see this error code before
                             if Curr_Error_Codes.count(EC) == 0:
                                 Curr_Error_Codes.append(EC)
                                 if EC in Error_Code_List:
@@ -592,22 +435,20 @@ for row in csv_rd1:
                     break
             if System_Error != 'N/A':
                 break
-    # If not found in Event and Narrative, look for error codes
+
     if System_Error == 'N/A':
         for s in SEvent:
             words = nltk.word_tokenize(s)
-            for w in words:
+            for idx, w in enumerate(words):
                 if w.find('fault') > -1 or w.find('error') > -1:
-                    if words[words.index(w) - 1].isdigit():
-                        System_Error = words[words.index(w) - 1:words.index(w)]
+                    if idx > 0 and words[idx - 1].isdigit():
+                        System_Error = words[idx - 1:idx]
                         break
             if System_Error != 'N/A':
                 break
-    # Recoverable or Non-Recoverable
+
     if System_Error != 'N/A':
         f8.write(MDR_Key + '\n')
-        # Give priority to Event Description because if to the surgeon the error was non-recoverable,
-        # it doesn't matter if the company said it was recoverable !!!!
         if ((CEvent.find('non recoverable') != -1) or (CEvent.find('non-recoverable') != -1) or
                 (CEvent.find('nonrecoverable') != -1) or (CEvent.find('irrecoverable') != -1) or
                 (CEvent.find('unrecoverable') != -1) or (CEvent.find('non- recoverable') != -1)):
@@ -624,7 +465,10 @@ for row in csv_rd1:
         elif CNarrative.find('recoverable') != -1:
             System_Error = 'Recoverable'
 
-#### Vision Problems
+    return System_Error, Curr_Error_Codes
+
+
+def classify_vision(CEvent, CNarrative, Narrative, MDR_Key):
     Vision = 'N/A'
     for keyword in vision_keywords:
         if CEvent.find(keyword) != -1:
@@ -636,10 +480,13 @@ for row in csv_rd1:
         else:
             loc = Narrative.lower().find('was associated with')
             if loc != -1:
-                rest = Narrative[loc:].split('.')[0].split('with')[1][0:40]
-                if (rest.lower().find('camera') != -1) and (rest.lower().find('manipulator') == -1):
-                    Vision = 'reason: camera'
-    # some manual fixing of false alarms.
+                sentence_lower = Narrative.lower()[loc:].split('.')[0]
+                parts = sentence_lower.split('with', 1)
+                if len(parts) > 1:
+                    rest = parts[1][0:40]
+                    if ('camera' in rest) and ('manipulator' not in rest):
+                        Vision = 'reason: camera'
+
     if MDR_Key in ['1584210', '2381732', '2664013', '961602', '3140434', '923148', '3489457']:
         Vision = 'N/A'
     if ((Vision.find('no video') != -1) and
@@ -650,50 +497,53 @@ for row in csv_rd1:
     if (Pre_Data.get(MDR_Key, EMPTY_PRE)[7] != 'N/A') and (Vision == 'N/A'):
         Vision = Pre_Data.get(MDR_Key, EMPTY_PRE)[7]
 
-#### Broken?
-    prefix_str = ''
-    pre_word = ''
-    post_word = ''
-    scnt = 0
-    # Get rid of spaces
-    Instruments = [inst_k.strip() for inst_k in Instruments]
+    return Vision
+
+
+def classify_broken(SEvent, SNarrative, Impact):
     Broken = 'N/A'
+    broken_increment = False
+    scnt = 0
+    prefix_str = ''
+    
+    cleaned_instruments = [inst_k.strip() for inst_k in Instruments]
+    
     for s in SEvent + SNarrative:
         if scnt >= len(SEvent):
             prefix_str = ''
         for keyword in broken_keywords:
             if (s.find(keyword) > -1) and not (negation_check(s, keyword)):
                 words = nltk.word_tokenize(s)
-                for w in words:
+                for idx, w in enumerate(words):
                     if w in ['broken', 'damaged']:
-                        if (not (words[words.index(w) - 1] in ['are', 'is', 'was', 'were']) and
-                                not (words[words.index(w) - 2] in ['are', 'is', 'was', 'were'])):
-                            for inst_k in Instruments:
-                                if ((words.index(w) < len(words) - 1) and
-                                        (inst_k in words[words.index(w) + 1:words.index(w) + 3])):
+                        if (not (idx > 0 and words[idx - 1] in ['are', 'is', 'was', 'were']) and
+                                not (idx > 1 and words[idx - 2] in ['are', 'is', 'was', 'were'])):
+                            for inst_k in cleaned_instruments:
+                                if ((idx < len(words) - 1) and
+                                        (inst_k in words[idx + 1:idx + 3])):
                                     Broken = prefix_str + w + ' ' + inst_k
-                                    broken_cnt = broken_cnt + 1
+                                    broken_increment = True
                                     break
-                    elif ((w == 'damage') and (words.index(w) < len(words) - 1) and
-                          (words[words.index(w) + 1] in ['to', 'into']) and
-                          (not words[words.index(w) - 1] in Instruments)):
-                        for inst_k in Instruments:
-                            if inst_k in words[words.index(w) + 1:words.index(w) + 3]:
+                    elif ((w == 'damage') and (idx < len(words) - 1) and
+                          (words[idx + 1] in ['to', 'into']) and
+                          (not (idx > 0 and words[idx - 1] in cleaned_instruments))):
+                        for inst_k in cleaned_instruments:
+                            if inst_k in words[idx + 1:idx + 3]:
                                 Broken = prefix_str + w + ' ' + inst_k
-                                broken_cnt = broken_cnt + 1
+                                broken_increment = True
                                 break
                     if (Broken == 'N/A') and (w in ['break', 'broke', 'broken', 'damage',
                                                     'damaged', 'returned', 'snapped']):
-                        for inst_k in Instruments:
-                            if ((words.index(w) < len(words) - 1) and
-                                    (inst_k in words[words.index(w) + 1:words.index(w) + 5])):
+                        for inst_k in cleaned_instruments:
+                            if ((idx < len(words) - 1) and
+                                    (inst_k in words[idx + 1:idx + 5])):
                                 Broken = prefix_str + w + ' ' + inst_k
-                                broken_cnt = broken_cnt + 1
+                                broken_increment = True
                                 break
-                            if ((words.index(w) > 4) and
-                                    (inst_k in words[words.index(w) - 5:words.index(w)])):
+                            if ((idx > 4) and
+                                    (inst_k in words[idx - 5:idx])):
                                 Broken = prefix_str + w + ' ' + inst_k
-                                broken_cnt = broken_cnt + 1
+                                broken_increment = True
                                 break
                     if Broken != 'N/A':
                         break
@@ -709,40 +559,39 @@ for row in csv_rd1:
             if Broken != 'N/A':
                 break
         scnt = scnt + 1
+    return Broken, broken_increment
 
-#### Fallen?
+
+def classify_fallen(SEvent, SNarrative, Broken, Impact, MDR_Key, csv_wr2, Narrative, Event):
     Fallen = 'N/A'
-    prefix_str = ''
-    scnt = 0
+    fallen_increment = False
+    
+    cleaned_instruments = [inst_k.strip() for inst_k in Instruments]
+    
     for s in SEvent:
-        # Break the sentence into words
         words = nltk.word_tokenize(s)
         found_pairs = []
         found_tags = ''
         found_str = ''
-        first_keyword = ''
-        for w in words:
-            # Bigram verbs
-            if ((w == 'lost' and (words[words.index(w) - 1] == 'was' or
-                                  words[words.index(w) - 1] == 'became')) or
-                    (w == 'found' and words[words.index(w) - 1] == 'was') or
-                    (w == 'noticed' and words[words.index(w) - 1] == 'was') or
-                    # If something was observed inside the patient, but not a burn or sparking
-                    (w == 'observed' and words[words.index(w) - 1] == 'was' and
-                     list(set(words[0:words.index(w) - 1]) & set(burn_keywords)) == []) or
-                    (w == 'seen' and words[words.index(w) - 1] == 'was') or
-                    ((w == 'apart' or w == 'off') and words[words.index(w) - 1] == 'came')):
+        last_keyword = ''
+        for idx, w in enumerate(words):
+            if ((w == 'lost' and idx > 0 and (words[idx - 1] == 'was' or
+                                              words[idx - 1] == 'became')) or
+                    (w == 'found' and idx > 0 and words[idx - 1] == 'was') or
+                    (w == 'noticed' and idx > 0 and words[idx - 1] == 'was') or
+                    (w == 'observed' and idx > 0 and words[idx - 1] == 'was' and
+                     list(set(words[0:idx - 1]) & set(burn_keywords)) == []) or
+                    (w == 'seen' and idx > 0 and words[idx - 1] == 'was') or
+                    ((w == 'apart' or w == 'off') and idx > 0 and words[idx - 1] == 'came')):
                 found_pairs.append((w, 'V'))
                 found_tags = found_tags + ' ' + 'V'
                 found_str = found_str + ' ' + w
-            # Bigram nouns
-            elif ((w == 'field' and (words[words.index(w) - 1] == 'surgical' or
-                                     words[words.index(w) - 1] == 'sterile')) or
-                  (w == 'cavity' and words[words.index(w) - 1] == 'abdominal')):
+            elif ((w == 'field' and idx > 0 and (words[idx - 1] == 'surgical' or
+                                                 words[idx - 1] == 'sterile')) or
+                  (w == 'cavity' and idx > 0 and words[idx - 1] == 'abdominal')):
                 found_pairs.append((w, 'NN'))
                 found_tags = found_tags + ' ' + 'NN'
                 found_str = found_str + ' ' + w
-            # Unigrams
             else:
                 for (keyword, tag) in fallen_keywords2:
                     if w == keyword:
@@ -751,16 +600,13 @@ for row in csv_rd1:
                             last_keyword = keyword
                         found_tags = found_tags + ' ' + tag
                         found_str = found_str + ' ' + keyword
-        # If any of the keywords was found, look for the patterns of V, IN, NN
         if found_tags != []:
             if (found_tags.find('V IN NN') != -1) or (found_tags.find('V IN IN NN') != -1):
-                # Check if the term is negated
                 if not (negation_check(s, last_keyword)):
                     Fallen = found_str
                     csv_wr2.writerow([MDR_Key, Narrative, Event, Impact, found_str])
-                    fallen_cnt1 = fallen_cnt1 + 1
+                    fallen_increment = True
 
-        # If not found, search for any of these keywords:
         if Fallen == 'N/A':
             for keyword in fallen_keywords3:
                 kindex = s.find(keyword)
@@ -768,19 +614,18 @@ for row in csv_rd1:
                     for k in peice_keywords:
                         if s[0:kindex].find(k) > -1:
                             Fallen = k + ' ' + keyword
-                            fallen_cnt1 = fallen_cnt1 + 1
+                            fallen_increment = True
                             break
-        # If already found, don't process the rest of sentences
         else:
             break
-    # If not found, search for any of these keywords:
+
     if Fallen == 'N/A':
         for s in SEvent + SNarrative:
             if (s.find('broke off') > -1) or (s.find('break off') > -1) or (s.find('broken off') > -1):
-                for inst_k in Instruments:
+                for inst_k in cleaned_instruments:
                     if s.find(inst_k) > -1:
                         Fallen = inst_k + ' broke off'
-                        fallen_cnt1 = fallen_cnt1 + 1
+                        fallen_increment = True
                         break
             elif ((s.find('broke into pieces') > -1) or (s.find('break into pieces') > -1) or
                   (s.find('broken into pieces') > -1) or (s.find('pieces were removed') > -1) or
@@ -804,20 +649,16 @@ for row in csv_rd1:
                   (s.find('retrieved from the abdom') > -1) or
                   (s.find('found and removed') > -1) or (s.find('found and retrieved') > -1)):
                 Fallen = 'broke into pieces'
-                fallen_cnt1 = fallen_cnt1 + 1
+                fallen_increment = True
             else:
                 for pword in ['piece', 'fragment']:
                     if Broken.find(pword) > -1:
                         Fallen = 'Broken ' + pword
-                        fallen_cnt1 = fallen_cnt1 + 1
+                        fallen_increment = True
                         break
-            # If already found, don't process the rest of sentences
             if Fallen != 'N/A':
                 break
 
-    # Narrative + Broken piece were successfully retrieved from the patient + Missing pieces found
-    # X-ray of CT-scan confirmed the location of pieces
-    # 1416362 => decided to not remove
     if MDR_Key in ['3430596', '2691480', '2691467', '1770807',
                    '955424', '952458', '1595497', '476270', '3291549',
                    '3484699', '3360346', '1473448', '1416362', '1403415',
@@ -826,16 +667,17 @@ for row in csv_rd1:
                    '1855009', '2037070', '1998148', '1028543', '799459',
                    '1566432', '3375033', '3519245', '3090826', '3368835']:
         Fallen = 'Narr/Missing Fallen'
-        fallen_cnt1 = fallen_cnt1 + 1
-    # Fix cases and add prefix
+        fallen_increment = True
     if MDR_Key in ['3444257']:
         Fallen = 'N/A'
+        
+    return Fallen, fallen_increment
 
-#### Electrical Arcing?
+
+def classify_arcing(SEvent, SNarrative, MDR_Key):
     Arced = 'N/A'
     for s in SEvent + SNarrative:
         for keyword in arcing_keywords:
-            # Check if the term is negated
             if (s.find(keyword) != -1) and not (negation_check(s, keyword)):
                 Arced = keyword
                 break
@@ -846,8 +688,10 @@ for row in csv_rd1:
             break
     if (Pre_Data.get(MDR_Key, EMPTY_PRE)[4] != 'N/A') and (Arced == 'N/A'):
         Arced = Pre_Data.get(MDR_Key, EMPTY_PRE)[4]
+    return Arced
 
-#### Tip Cover Accessory?
+
+def classify_tip_cover(SEvent, SNarrative, MDR_Key):
     Tip_Cover = 'N/A'
     for s in SEvent + SNarrative:
         if ((s.find('tip cover') != -1) or (s.find('tip cover accessory') != -1) or
@@ -863,45 +707,42 @@ for row in csv_rd1:
 
     if (Pre_Data.get(MDR_Key, EMPTY_PRE)[6] != 'N/A') and (Tip_Cover == 'N/A'):
         Tip_Cover = Pre_Data.get(MDR_Key, EMPTY_PRE)[6]
+    return Tip_Cover
 
-#### Moving?
+
+def classify_moving(SEvent, MDR_Key):
+    global all_inst_postfix
     Moved = 'N/A'
     for s in SEvent:
         words = nltk.word_tokenize(s)
         found_pairs = []
         found_tags = ''
         found_str = ''
-        first_keyword = ''
-        for w in words:
+        for idx, w in enumerate(words):
             for inst_k in ['instrument']:
-                if (w == inst_k) and (words.index(w) + 1 < len(words)):
-                    next_w = words[words.index(w) + 1]
+                if (w == inst_k) and (idx + 1 < len(words)):
+                    next_w = words[idx + 1]
                     if all_inst_postfix.count(next_w) == 0:
                         all_inst_postfix.append(next_w)
 
-            # Not Recognized
-            if ((w == 'recognized' and words[words.index(w) - 1] == 'not') or
-                    (w == 'recongize' and words[words.index(w) - 1] == 'not' and
-                     words[words.index(w) - 1] == 'did') or
-                    (w == 'recognition' and words[words.index(w) - 1] == 'instrument') or
-                    (w == 'recognizing' and words[words.index(w) - 1] == 'not')):
-                Moved = w + ' ' + words[words.index(w) - 1]
+            if ((w == 'recognized' and idx > 0 and words[idx - 1] == 'not') or
+                    (w == 'recongize' and idx > 1 and words[idx - 1] == 'not' and words[idx - 2] == 'did') or
+                    (w == 'recognition' and idx > 0 and words[idx - 1] == 'instrument') or
+                    (w == 'recognizing' and idx > 0 and words[idx - 1] == 'not')):
+                Moved = w + ' ' + words[idx - 1]
                 break
-            # POS Patterns
             else:
                 for (keyword, tag) in moving_keywords:
                     if w == keyword:
                         found_pairs.append((keyword, tag))
                         found_tags = found_tags + ' ' + tag
                         found_str = found_str + ' ' + keyword
-        # If any of the keywords was found, look for the patterns of: N-V, V-IN-NN
         if found_tags != []:
             if ((found_tags.find('NG V') != -1) or (found_tags.find('V IN NN') != -1) or
                     (found_tags.find('IN NN') != -1)):
                 Moved = found_str
                 break
 
-        # If not found, search for any of these keywords:
         if Moved == 'N/A':
             if (s.find('instrument') != -1) and ((s.find('not respond') != -1) or
                                                  (s.find('not always respond') != -1)):
@@ -919,66 +760,35 @@ for row in csv_rd1:
 
         if Moved != 'N/A':
             break
+            
     if MDR_Key in ['2975656', '878764', '3444332', '3420104', '3348093',
                    '1576670', '1559178', '271460', '2147492', '2807222']:
         Moved = 'N/A'
 
     if (Pre_Data.get(MDR_Key, EMPTY_PRE)[3] != 'N/A') and (Moved == 'N/A'):
         Moved = Pre_Data.get(MDR_Key, EMPTY_PRE)[3]
+        
+    return Moved
 
-#### Power Problems
-    Power = 'N/A'
 
-#### Injuries that involved Malfunctions
-    if MDR_Key in IN_MALFUNC:
-        if IN_MALFUNC[MDR_Key].find('Fell') != -1:
-            Fallen = IN_MALFUNC[MDR_Key]
-        if IN_MALFUNC[MDR_Key].find('System Error') != -1:
-            System_Error = IN_MALFUNC[MDR_Key]
-        if IN_MALFUNC[MDR_Key].find('Broken') != -1:
-            Broken = IN_MALFUNC[MDR_Key]
-        if IN_MALFUNC[MDR_Key].find('Arcing') != -1:
-            Arced = IN_MALFUNC[MDR_Key]
-        if IN_MALFUNC[MDR_Key].find('Tip Cover') != -1:
-            Tip_Cover = IN_MALFUNC[MDR_Key]
-        if IN_MALFUNC[MDR_Key].find('Unintended Operation') != -1:
-            Moved = IN_MALFUNC[MDR_Key]
-        if IN_MALFUNC[MDR_Key].find('Other') != -1:
-            Other = IN_MALFUNC[MDR_Key] + ' IN'
-
-#### Other Malfunctions that we didn't review but were reported as malfunction
-    if ((System_Error == 'N/A') and (Moved == 'N/A') and (Arced == 'N/A') and
-            (Fallen == 'N/A') and (Tip_Cover == 'N/A') and (Vision == 'N/A') and
-            (Other == 'N/A')):
-        if (Impact == 'M') or (Broken != 'N/A'):
-            Other = 'Other M'
-        else:
-            for s in SNarrative:
-                if ((s.find('system issue experienced') > -1) or
-                        (s.find('the issue experienced by') > -1)):
-                    Other = 'Other O'
-                    break
-
-#### A System reset happened?
-    Reset = 'N/A'
-    for keyword in reset_keywords:
-        if CNarrative.find(keyword) > 0 or CEvent.find(keyword) > 0:
-            Reset = 'System_Reset'
-            break
-
-#### Surgery was converted? or reschedulued?
+def classify_converted_rescheduled(CEvent, CNarrative):
     Converted = 'N/A'
     Rescheduled = 'N/A'
-    # Give priority to Event Description and the one that comes at the end
+    
+    conv_loc = -1
+    resc_loc = -1
+    
     for keyword in convert_keywords:
-        conv_loc = CEvent.find(keyword)
-        if conv_loc != -1:
+        loc = CEvent.find(keyword)
+        if loc != -1:
             Converted = 'Converted'
+            conv_loc = loc
             break
     for keyword in reschedule_keywords:
-        resc_loc = CEvent.find(keyword)
-        if resc_loc != -1:
+        loc = CEvent.find(keyword)
+        if loc != -1:
             Rescheduled = 'Rescheduled'
+            resc_loc = loc
             break
 
     if (Converted != 'N/A') and (Rescheduled != 'N/A'):
@@ -986,18 +796,20 @@ for row in csv_rd1:
             Converted = 'N/A'
         else:
             Rescheduled = 'N/A'
-        time.sleep(10)
+        # time.sleep(10)
 
     if (Converted == 'N/A') and (Rescheduled == 'N/A'):
         for keyword in convert_keywords:
-            conv_loc = CNarrative.find(keyword)
-            if conv_loc != -1:
+            loc = CNarrative.find(keyword)
+            if loc != -1:
                 Converted = 'Converted'
+                conv_loc = loc
                 break
         for keyword in reschedule_keywords:
-            resc_loc = CNarrative.find(keyword)
-            if resc_loc != -1:
+            loc = CNarrative.find(keyword)
+            if loc != -1:
                 Rescheduled = 'Rescheduled'
+                resc_loc = loc
                 break
 
         if (Converted != 'N/A') and (Rescheduled != 'N/A'):
@@ -1005,72 +817,303 @@ for row in csv_rd1:
                 Converted = 'N/A'
             else:
                 Rescheduled = 'N/A'
-            time.sleep(10)
+            # time.sleep(10)
+            
+    return Converted, Rescheduled
 
-### Write the output
+
+# =====================================================================
+# Main Process Loop
+# =====================================================================
+
+def main():
+    global f5, f6, f8, csv_wr2, Pre_Data, Surgery_Dictionary, Surgery_Class_Hash, all_inst_postfix, Error_Code_List
+    global count1, count2, fallen_cnt1, fallen_cnt2, broken_cnt, missed_injuries
+    
+    file_stack = contextlib.ExitStack()
+    atexit.register(file_stack.close)
+    
+    f0 = file_stack.enter_context(open(CSV_In, 'r', newline='', encoding='latin-1'))
+    csv_rd1 = csv.reader(f0, dialect='excel', delimiter=',')
+    
+    pre_f0 = file_stack.enter_context(open(Pre_CSV_In, 'r', newline='', encoding='latin-1'))
+    pre_csv_rd1 = csv.reader(pre_f0, dialect='excel', delimiter=',')
+    
+    f0_1 = file_stack.enter_context(open(os.path.join(DATA_DIR, 'Injuries_Malfunctions.csv'), 'r', newline='', encoding='latin-1'))
+    csv_rd2 = csv.reader(f0_1, dialect='excel', delimiter=',')
+    f0_2 = file_stack.enter_context(open(os.path.join(DICT_DIR, 'Surgery_Class_Dictionary.csv'), 'r', newline='',
+                encoding='latin-1'))
+    surgery_dict = csv.reader(f0_2, dialect='excel', delimiter=',')
+    f0_3 = file_stack.enter_context(open(os.path.join(DICT_DIR, 'MDR_Key_Surgery_Class_Dictionary.csv'), 'r', newline='',
+                encoding='latin-1'))
+    surgery_dict2 = csv.reader(f0_3, dialect='excel', delimiter=',')
+    
+    # CSV output file
+    f1 = file_stack.enter_context(open(CSV_Out, 'w', newline=''))
+    csv_wr = csv.writer(f1, dialect='excel', delimiter=',')
+    f2 = file_stack.enter_context(open(os.path.join(OUTPUT_DIR, 'Da_Vinci_MDR_Malfunction_TempResults2.csv'), 'w', newline=''))
+    csv_wr2 = csv.writer(f2, dialect='excel', delimiter=',')
+    f3 = file_stack.enter_context(open(os.path.join(OUTPUT_DIR, 'Da_Vinci_MDR_Malfunction_TempResults3.csv'), 'w', newline=''))
+    csv_wr3 = csv.writer(f3, dialect='excel', delimiter=',')
+    f4 = file_stack.enter_context(open(os.path.join(OUTPUT_DIR, 'Difference.csv'), 'w', newline=''))
+    csv_wr4 = csv.writer(f4, dialect='excel', delimiter=',')
+    f5 = file_stack.enter_context(open(os.path.join(OUTPUT_DIR, 'Negations.txt'), 'w'))
+    f6 = file_stack.enter_context(open(os.path.join(OUTPUT_DIR, 'System_Errors.txt'), 'w'))
+    f7 = file_stack.enter_context(open(os.path.join(OUTPUT_DIR, 'Possible_Error_Codes.txt'), 'w'))
+    f8 = file_stack.enter_context(open(os.path.join(OUTPUT_DIR, 'TestErrorCodes.txt'), 'w'))
+    f9 = file_stack.enter_context(open(os.path.join(OUTPUT_DIR, 'TestInstruments.txt'), 'w'))
+    
+    # Excel output file titles
     if daVinci == 0:
-        response = [MDR_Key, Surgery_Keyword, Narrative, Event, Impact, Outcome, Injuries,
-                    Manufacturer, Brand_Name, Generic_Name, Device_Category, Product_Code,
-                    Manufacture_Year, Event_Year, Corrected_Event_Year, Report_Year,
-                    Time_to_Event, Time_to_Report, Surgery_Type, Surgery_Class, Cardiac_Type,
-                    Converted, Rescheduled, Reset, Fallen, System_Error,
-                    Moved, Arced, Broken, Tip_Cover, Vision, Power, Other]
+        column_titles = ['MDR_Key', 'Surgery_Keyword', 'Narrative', 'Event', 'Patient Impact', 'Outcome', 'Injuries',
+                         'Manufacturer', 'Brand_Name', 'Generic_Name', 'Device_Category', 'Product_Code',
+                         'Manufacture_Year', 'Event_Year', 'Corrected_Event_Year', 'Report_Year',
+                         'Time_to_Event', 'Time_to_Report', 'Surgery_Type', 'Surgery_Class', 'Cardiac_Type',
+                         'New Converted', 'New Rescheduled', 'System Reset', 'Fallen', 'System Error',
+                         'Moved', 'Arced', 'Broken', 'Tip Cover', 'Vision', 'Power', 'Other']
     else:
-        response = [MDR_Key, Narrative, Event, Impact, Outcome, Injuries,
-                    Manufacturer, Brand_Name, Generic_Name, Product_Code,
-                    Manufacture_Year, Event_Year, Corrected_Event_Year, Report_Year,
-                    Time_to_Event, Time_to_Report, Surgery_Type, Surgery_Class,
-                    Converted, Rescheduled, Reset, Fallen, System_Error,
-                    Moved, Arced, Broken, Tip_Cover, Vision, Power, Other]
-    # Write to CSV file
-    csv_wr.writerow(response)
-    # Write to Excel file (.xls caps at 65,536 rows; the CSV always has all rows)
-    if chk_sum <= 65535:
-        for k in range(0, len(response)):
-            worksheet.write(chk_sum, k, str(response[k]))
-    elif chk_sum == 65536:
-        print('\nWarning: row limit of .xls reached; remaining rows are in the CSV only.')
-    # Save the data for current row
-    all_data.append(response)
-    chk_sum += 1
-    # Update the progress bar
-    if chk_sum % RStep == 0:
-        sys.stdout.write("\r%d%%.." % (chk_sum // RStep * 10))
-        sys.stdout.flush()
+        column_titles = ['MDR_Key', 'Narrative', 'Event', 'Patient Impact', 'Outcome', 'Injuries',
+                         'Manufacturer', 'Brand_Name', 'Generic_Name', 'Product_Code',
+                         'Manufacture_Year', 'Event_Year', 'Corrected_Event_Year', 'Report_Year',
+                         'Time_to_Event', 'Time_to_Report',
+                         'Surgery_Type', 'Surgery_Class', 'New Converted', 'New Rescheduled',
+                         'System Reset', 'Fallen', 'System Error',
+                         'Moved', 'Arced', 'Broken', 'Tip Cover', 'Vision', 'Power', 'Other']
+                         
+    csv_wr.writerow(column_titles)
+    csv_wr2.writerow(['MDR_Key', 'Narrative', 'Event', 'Patient Impact', 'Temp'])
+    csv_wr3.writerow(['MDR_Key', 'Narrative', 'Event', 'Patient Impact', 'Temp'])
+    
+    # Load Injury Malfunctions
+    IN_MALFUNC = {'MDR_Key': 'Malfuncion_Class'}
+    for row in csv_rd2:
+        IN_MALFUNC[row[0]] = row[1]
+        
+    # Load Previous Data
+    Pre_Data = {'MDR_Key': []}
+    for row in pre_csv_rd1:
+        Pre_Data[row[0]] = [row[20], row[21], row[22], row[23], row[24], row[25], row[26], row[27]]
+        
+    # Load Surgery Class Dictionaries
+    Surgery_Dictionary = []
+    for row in surgery_dict:
+        Surgery_Dictionary.append([row[0], row[1].strip()])
+        
+    Surgery_Class_Hash = {'MDR_Key': ['Surgery Class', 'Surgery_Type']}
+    for row in surgery_dict2:
+        Surgery_Class_Hash[row[0]] = [row[2], row[1]]
+        
+    # Initialization
+    Error_Code_List = {'Error Code': (0, 'Description')}
+    all_data = []
+    all_inst_postfix = []
+    all_broken = []
+    chk_sum = 1
+    
+    # Get the total number of records to read
+    NRows = len(list(csv_rd1))
+    RStep = max(1, NRows // 10)
+    
+    # Go to the beginning
+    f0.seek(0)
+    title = next(csv_rd1)
+    
+    # Iterate over all MDR keys
+    for row in csv_rd1:
+        if daVinci == 0:
+            MDR_Key = row[1]
+            Surgery_Keyword = row[2]
+            Event = row[3]
+            Narrative = row[4]
+            Impact = row[5]
+            Outcome = row[6]
+            Manufacture_Year = row[7]
+            Event_Year = row[8]
+            Report_Year = row[9]
+            Time_to_Event = row[10]
+            Time_to_Report = row[11]
+            Manufacturer = row[12]
+            Brand_Name = row[13]
+            Generic_Name = row[14]
+            Product_Code = row[15]
+        else:
+            MDR_Key = row[1]
+            Event = row[2]
+            Narrative = row[3]
+            Impact = row[4]
+            Outcome = row[5]
+            Manufacture_Year = row[6]
+            Event_Year = row[7]
+            Report_Year = row[10]
+            Time_to_Event = row[11]
+            Time_to_Report = row[12]
+            Manufacturer = row[13]
+            Brand_Name = row[14]
+            Generic_Name = row[15]
+            Product_Code = row[16]
+            
+        # Correct missing Event Years based on Report Year
+        if (Event_Year == 'N/A') or (Event_Year == '') or (Event_Year == ' '):
+            Corrected_Event_Year = Report_Year
+        else:
+            Corrected_Event_Year = Event_Year
+            
+        # Clean up text
+        regex = re.compile('[%s]' % re.escape('!"#$%&\'()*+,./:;<=>?@[\\]^_`{|}~'))
+        CNarrative = ' '.join(regex.sub(' ', Narrative).lower().split())
+        CEvent = ' '.join(regex.sub(' ', Event).lower().split())
+        WNarrative = CNarrative.split(' ')
+        WEvent = CEvent.split(' ')
+        SNarrative = Narrative.lower().split('.')
+        SEvent = Event.lower().split('.')
+        
+        Other = 'N/A'
+        
+        # Cardiac categories
+        Device_Category = 'Other'
+        if daVinci == 0:
+            for k in Cardiac_Instruments:
+                if Generic_Name.lower().find(k) > -1:
+                    Device_Category = k
+                    print('Category =' + k)
+                    break
+                    
+        # 1. Surgery
+        Surgery_Type, Surgery_Class, Cardiac_Type = classify_surgery(SEvent, Narrative, WEvent, MDR_Key)
+        
+        # 2. Injuries
+        Injuries = reclassify_injury(MDR_Key, Impact, SEvent)
+        if len(Injuries) > 0:
+            missed_injuries = missed_injuries + 1
+            Impact = 'IN'
+        elif MDR_Key in Other_Missed:
+            missed_injuries = missed_injuries + 1
+            Injuries.append('bleed')
+            Impact = 'IN'
+        elif MDR_Key == '2559247':
+            Impact = 'D'
+            
+        # 3. System Error
+        System_Error, Curr_Error_Codes = classify_system_error(SEvent, SNarrative, CEvent, CNarrative, MDR_Key, f6, f8)
+        
+        # 4. Vision
+        Vision = classify_vision(CEvent, CNarrative, Narrative, MDR_Key)
+        
+        # 5. Broken
+        Broken, is_broken = classify_broken(SEvent, SNarrative, Impact)
+        if is_broken:
+            broken_cnt = broken_cnt + 1
+            
+        # 6. Fallen
+        Fallen, is_fallen = classify_fallen(SEvent, SNarrative, Broken, Impact, MDR_Key, csv_wr2, Narrative, Event)
+        if is_fallen:
+            fallen_cnt1 = fallen_cnt1 + 1
+            
+        # 7. Arcing
+        Arced = classify_arcing(SEvent, SNarrative, MDR_Key)
+        
+        # 8. Tip Cover
+        Tip_Cover = classify_tip_cover(SEvent, SNarrative, MDR_Key)
+        
+        # 9. Moving
+        Moved = classify_moving(SEvent, MDR_Key)
+        
+        Power = 'N/A'
+        
+        # Involve malfunctions in injuries
+        if MDR_Key in IN_MALFUNC:
+            if IN_MALFUNC[MDR_Key].find('Fell') != -1:
+                Fallen = IN_MALFUNC[MDR_Key]
+            if IN_MALFUNC[MDR_Key].find('System Error') != -1:
+                System_Error = IN_MALFUNC[MDR_Key]
+            if IN_MALFUNC[MDR_Key].find('Broken') != -1:
+                Broken = IN_MALFUNC[MDR_Key]
+            if IN_MALFUNC[MDR_Key].find('Arcing') != -1:
+                Arced = IN_MALFUNC[MDR_Key]
+            if IN_MALFUNC[MDR_Key].find('Tip Cover') != -1:
+                Tip_Cover = IN_MALFUNC[MDR_Key]
+            if IN_MALFUNC[MDR_Key].find('Unintended Operation') != -1:
+                Moved = IN_MALFUNC[MDR_Key]
+            if IN_MALFUNC[MDR_Key].find('Other') != -1:
+                Other = IN_MALFUNC[MDR_Key] + ' IN'
+                
+        # Other malfunctions
+        if ((System_Error == 'N/A') and (Moved == 'N/A') and (Arced == 'N/A') and
+                (Fallen == 'N/A') and (Tip_Cover == 'N/A') and (Vision == 'N/A') and
+                (Other == 'N/A')):
+            if (Impact == 'M') or (Broken != 'N/A'):
+                Other = 'Other M'
+            else:
+                for s in SNarrative:
+                    if ((s.find('system issue experienced') > -1) or
+                            (s.find('the issue experienced by') > -1)):
+                        Other = 'Other O'
+                        break
+                        
+        # System Reset
+        Reset = 'N/A'
+        for keyword in reset_keywords:
+            if CNarrative.find(keyword) > 0 or CEvent.find(keyword) > 0:
+                Reset = 'System_Reset'
+                break
+                
+        # Converted/Rescheduled
+        Converted, Rescheduled = classify_converted_rescheduled(CEvent, CNarrative)
+        
+        # Output row structure
+        if daVinci == 0:
+            response = [MDR_Key, Surgery_Keyword, Narrative, Event, Impact, Outcome, Injuries,
+                        Manufacturer, Brand_Name, Generic_Name, Device_Category, Product_Code,
+                        Manufacture_Year, Event_Year, Corrected_Event_Year, Report_Year,
+                        Time_to_Event, Time_to_Report, Surgery_Type, Surgery_Class, Cardiac_Type,
+                        Converted, Rescheduled, Reset, Fallen, System_Error,
+                        Moved, Arced, Broken, Tip_Cover, Vision, Power, Other]
+        else:
+            response = [MDR_Key, Narrative, Event, Impact, Outcome, Injuries,
+                        Manufacturer, Brand_Name, Generic_Name, Product_Code,
+                        Manufacture_Year, Event_Year, Corrected_Event_Year, Report_Year,
+                        Time_to_Event, Time_to_Report, Surgery_Type, Surgery_Class,
+                        Converted, Rescheduled, Reset, Fallen, System_Error,
+                        Moved, Arced, Broken, Tip_Cover, Vision, Power, Other]
+                        
+        csv_wr.writerow(response)
+        all_data.append(response)
+        chk_sum += 1
+        
+        if chk_sum % RStep == 0:
+            sys.stdout.write("\r%d%%.." % (chk_sum // RStep * 10))
+            sys.stdout.flush()
+            
+    sys.stdout.write("\rDone!")
+    sys.stdout.flush()
+    
+    # Save the modern XLSX file
+    clean_all_data = [[clean_for_excel(x) for x in row] for row in all_data]
+    df = pd.DataFrame(clean_all_data, columns=column_titles)
+    df.to_excel(Excel_Out, index=False)
+    
+    # Write possible error codes
+    for key in Error_Code_List.keys():
+        Error_Code = str(key)
+        Frequency = str(Error_Code_List[key][0])
+        Description = str(Error_Code_List[key][1])
+        f7.write(Error_Code + ',' + Frequency + ',' + Description + '\n')
+        
+    all_broken.sort()
+    for a in all_broken:
+        f9.write(a.strip() + '\n')
+        
+    # ExitStack will close files automatically, but manual stack close executes it here
+    file_stack.close()
+    
+    print('\n' + str(chk_sum - 1) + ' reports were read and written')
+    print(str(count1) + ' NegEx Negations')
+    print(str(count2) + ' No/Not/Nothing')
+    print(str(fallen_cnt1) + ' Fallen cases found by Part of Speech Tagging and Pattern Matching')
+    print(str(fallen_cnt2) + ' Fallen cases found by Keyword Searching')
+    print(str(broken_cnt) + ' Broken cases found by Keyword Searching')
+    print(str(missed_injuries) + ' Missed Injutries found by the keyword searching')
 
-sys.stdout.write("\rDone!")
-sys.stdout.flush()
-# Close the Excel file
-workbook.save(Excel_Out)
 
-for key in Error_Code_List.keys():
-    Error_Code = str(key)
-    Frequency = str(Error_Code_List[key][0])
-    Description = str(Error_Code_List[key][1])
-    f7.write(Error_Code + ',' + Frequency + ',' + Description + '\n')
-
-all_broken.sort()
-for a in all_broken:
-    f9.write(a.strip() + '\n')
-
-# Close the files
-f0.close()
-f0_1.close()
-f0_2.close()
-f0_3.close()
-f1.close()
-f2.close()
-f3.close()
-f4.close()
-f5.close()
-f6.close()
-f7.close()
-f8.close()
-f9.close()
-print('\n' + str(chk_sum - 1) + ' reports were read and written')
-print(str(count1) + ' NegEx Negations')
-print(str(count2) + ' No/Not/Nothing')
-print(str(fallen_cnt1) + ' Fallen cases found by Part of Speech Tagging and Pattern Matching')
-print(str(fallen_cnt2) + ' Fallen cases found by Keyword Searching')
-print(str(broken_cnt) + ' Broken cases found by Keyword Searching')
-print(str(missed_injuries) + ' Missed Injutries found by the keyword searching')
+if __name__ == '__main__':
+    main()

@@ -45,7 +45,9 @@ END_YEAR = 2025
 Excel_In = os.path.join(DATA_DIR, 'daVinci_MAUDE_Data_' + str(END_YEAR) + '.xls')
 if not os.path.exists(Excel_In):
     Excel_In = os.path.join(DATA_DIR, 'daVinci_MAUDE_Times_' + str(END_YEAR) + '.csv')
-Excel_In2 = os.path.join(DATA_DIR, 'daVinci_MAUDE_Classified_' + str(END_YEAR) + '.xls')
+Excel_In2 = os.path.join(DATA_DIR, 'daVinci_MAUDE_Classified_' + str(END_YEAR) + '.xlsx')
+if not os.path.exists(Excel_In2):
+    Excel_In2 = os.path.join(DATA_DIR, 'daVinci_MAUDE_Classified_' + str(END_YEAR) + '.xls')
 if not os.path.exists(Excel_In2):
     Excel_In2 = os.path.join(BASE_DIR, 'output',
                              'daVinci_MDR_Malfunction_Impacts_' + str(END_YEAR) + '_PLOS_One.csv')
@@ -86,10 +88,10 @@ def load_procedure_window(start_year, end_year):
 
 
 def load_table(filename, sheet=None):
-    """Return (header, rows) from an .xls sheet or a .csv file.
+    """Return (header, rows) from an .xlsx/.xls sheet or a .csv file.
 
     The legacy pipeline stored the merged MAUDE data in .xls workbooks; the
-    openFDA route writes CSVs instead (xls caps at 65,536 rows). Values are
+    openFDA route writes CSVs/XLSX instead (xls caps at 65,536 rows). Values are
     returned as strings either way.
     """
     if filename.lower().endswith('.csv'):
@@ -97,6 +99,11 @@ def load_table(filename, sheet=None):
             reader = csv.reader(f)
             header = next(reader)
             rows = [[str(c) for c in r] for r in reader]
+        return header, rows
+    elif filename.lower().endswith('.xlsx'):
+        df = pd.read_excel(filename, sheet_name=sheet if sheet else 0, dtype=str).fillna('')
+        header = list(df.columns)
+        rows = df.values.tolist()
         return header, rows
     databook = xlrd.open_workbook(filename)
     datasheet = databook.sheet_by_name(sheet) if sheet else databook.sheet_by_index(0)
